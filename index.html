@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF Studio Pro — Editor Profissional de PDF</title>
+  <link rel="stylesheet" href="style.css" />
+
+  <!-- PDF.js 3.11.174 (UMD: compatível com file:// e servidores HTTP) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+
+  <!-- pdf-lib 1.17.1 para manipulação vetorial e exportação fiel de PDF -->
+  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <!-- ==================== BARRA SUPERIOR PRINCIPAL ==================== -->
+    <header class="top-bar" role="banner">
+      <div class="top-bar-left">
+        <button id="btnToggleLeftSidebar" class="icon-btn" title="Alternar Painel Lateral" aria-label="Alternar Painel Lateral">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="9" y1="4" x2="9" y2="20" stroke="currentColor" stroke-width="1.8"/></svg>
+        </button>
+
+        <div class="brand">
+          <div class="brand-badge" aria-hidden="true">PDF</div>
+          <div class="brand-info">
+            <span class="brand-title">PDF Studio Pro</span>
+            <input id="docTitleInput" class="doc-title-input" type="text" value="Nenhum documento aberto" title="Nome do arquivo ao exportar" aria-label="Nome do documento" />
+          </div>
+        </div>
+
+        <div class="toolbar-divider"></div>
+
+        <button id="btnOpenPdf" class="btn btn-secondary" title="Abrir arquivo PDF (Ctrl+O)">
+          <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          <span>Abrir PDF</span>
+        </button>
+        <input id="pdfFileInput" type="file" accept="application/pdf,.pdf" hidden />
+        <input id="imageFileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+
+        <div class="toolbar-divider"></div>
+
+        <div class="btn-group" role="group" aria-label="Histórico">
+          <button id="btnUndo" class="icon-btn" title="Desfazer (Ctrl+Z)" disabled>
+            <svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9h10a6 6 0 1 1 0 12h-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+          <button id="btnRedo" class="icon-btn" title="Refazer (Ctrl+Y)" disabled>
+            <svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 9H10a6 6 0 1 0 0 12h3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+
+        <div class="btn-group hide-sm" role="group" aria-label="Área de transferência">
+          <button id="btnCut" class="icon-btn" title="Recortar (Ctrl+X)">
+            <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="20" y1="4" x2="8.12" y2="15.88" stroke="currentColor" stroke-width="1.8"/><line x1="14.47" y1="14.48" x2="20" y2="20" stroke="currentColor" stroke-width="1.8"/><line x1="8.12" y1="8.12" x2="12" y2="12" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+          <button id="btnCopy" class="icon-btn" title="Copiar (Ctrl+C)">
+            <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+          <button id="btnPaste" class="icon-btn" title="Colar (Ctrl+V)">
+            <svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="8" y="2" width="8" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+          <button id="btnDuplicate" class="icon-btn" title="Duplicar elemento (Ctrl+D)">
+            <svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="14" y1="11" x2="14" y2="17" stroke="currentColor" stroke-width="1.8"/><line x1="11" y1="14" x2="17" y2="14" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+          <button id="btnDeleteSelected" class="icon-btn danger-hover" title="Excluir selecionado (Delete)">
+            <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Navegação de Páginas e Zoom -->
+      <div class="top-bar-center">
+        <div class="nav-pill" role="group" aria-label="Navegação de páginas">
+          <button id="btnPrevPage" class="icon-btn sm" title="Página Anterior (PageUp)" disabled>
+            <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          </button>
+          <input id="pageNumberInput" class="page-input" type="number" min="1" value="1" aria-label="Número da página atual" disabled />
+          <span class="page-total">/ <span id="pageCountLabel">0</span></span>
+          <button id="btnNextPage" class="icon-btn sm" title="Próxima Página (PageDown)" disabled>
+            <svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          </button>
+        </div>
+
+        <div class="zoom-pill" role="group" aria-label="Controle de zoom">
+          <button id="btnZoomOut" class="icon-btn sm" title="Diminuir Zoom (Ctrl+-)" disabled>
+            <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2"/></svg>
+          </button>
+          <select id="zoomSelect" class="zoom-select" aria-label="Nível de zoom" disabled>
+            <option value="0.5">50%</option>
+            <option value="0.75">75%</option>
+            <option value="1">100%</option>
+            <option value="1.25" selected>125%</option>
+            <option value="1.5">150%</option>
+            <option value="2">200%</option>
+            <option value="2.5">250%</option>
+            <option value="3">300%</option>
+            <option value="fit-width">Ajustar Largura</option>
+            <option value="fit-page">Ajustar Página</option>
+          </select>
+          <button id="btnZoomIn" class="icon-btn sm" title="Aumentar Zoom (Ctrl++)" disabled>
+            <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19" stroke="currentColor" stroke-width="2"/><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Ações Finais -->
+      <div class="top-bar-right">
+        <button id="btnRunOcr" class="btn btn-ghost hide-md" title="Executar OCR para reconhecer texto em PDFs escaneados" disabled>
+          <svg viewBox="0 0 24 24"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="7" y1="12" x2="17" y2="12" stroke="currentColor" stroke-width="1.8"/><line x1="9" y1="9" x2="15" y2="9" stroke="currentColor" stroke-width="1.6"/><line x1="9" y1="15" x2="13" y2="15" stroke="currentColor" stroke-width="1.6"/></svg>
+          <span>OCR</span>
+        </button>
+
+        <button id="btnOpenExport" class="btn btn-primary" title="Exportar PDF (Ctrl+S)" disabled>
+          <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><polyline points="7 10 12 15 17 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>Exportar PDF</span>
+        </button>
+
+        <button id="btnToggleTheme" class="icon-btn" title="Alternar Tema Claro/Escuro" aria-label="Alternar tema">
+          <svg id="iconSun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+
+        <button id="btnToggleRightPanel" class="icon-btn" title="Alternar Painel de Propriedades" aria-label="Alternar Painel de Propriedades">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="15" y1="4" x2="15" y2="20" stroke="currentColor" stroke-width="1.8"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ==================== BARRA DE FERRAMENTAS & FORMATAÇÃO ==================== -->
+    <div class="ribbon-bar" role="toolbar" aria-label="Ferramentas de edição e formatação">
+      <!-- Grupo 1: Ferramentas Principais -->
+      <div class="ribbon-section" aria-label="Ferramentas">
+        <button class="tool-btn active" data-tool="select" title="Selecionar e Mover Objetos (V)">
+          <svg viewBox="0 0 24 24"><path d="M5 3l14 9-6.5 1.5L9 20 5 3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>Selecionar</span>
+        </button>
+
+        <button class="tool-btn" data-tool="edit-text" title="Editar Texto Original do PDF (T)">
+          <svg viewBox="0 0 24 24"><path d="M4 7V4h16v3M12 4v16M9 20h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Editar Texto</span>
+        </button>
+
+        <button class="tool-btn" data-tool="textbox" title="Adicionar Caixa de Texto (X)">
+          <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2"/><path d="M8 9h8M12 9v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>Caixa Texto</span>
+        </button>
+
+        <button class="tool-btn" data-tool="highlight" title="Destacar Texto (H)">
+          <svg viewBox="0 0 24 24"><path d="M9 11l-6 6v3h9l3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M22 12l-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>Destacar</span>
+        </button>
+
+        <button class="tool-btn" data-tool="comment" title="Adicionar Comentário (C)">
+          <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>Comentário</span>
+        </button>
+
+        <button class="tool-btn" data-tool="draw" title="Desenho à Mão Livre (D)">
+          <svg viewBox="0 0 24 24"><path d="M12 20h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>Desenhar</span>
+        </button>
+
+        <!-- Dropdown de Formas -->
+        <div class="dropdown-wrap">
+          <button class="tool-btn" id="btnShapeTool" data-tool="shape" title="Formas Geométricas (S)">
+            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="11" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="16.5" cy="16.5" r="4.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+            <span>Formas ▾</span>
+          </button>
+          <div class="dropdown-menu" id="shapeDropdown">
+            <button class="dropdown-item" data-shape="rect">Retângulo</button>
+            <button class="dropdown-item" data-shape="ellipse">Elipse / Círculo</button>
+            <button class="dropdown-item" data-shape="line">Linha</button>
+            <button class="dropdown-item" data-shape="arrow">Seta</button>
+          </div>
+        </div>
+
+        <button class="tool-btn" id="btnInsertImage" data-tool="image" title="Inserir Imagem (I)">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="8.5" cy="9.5" r="1.5" fill="currentColor"/><path d="M21 15l-5-5L5 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>Imagem</span>
+        </button>
+
+        <button class="tool-btn" id="btnOpenSignature" data-tool="signature" title="Assinatura Digital">
+          <svg viewBox="0 0 24 24"><path d="M3 17c2-4 4-8 6-8s1 6 3 6 3-5 5-5 2 3 4 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="3" y1="20" x2="21" y2="20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>Assinatura</span>
+        </button>
+
+        <!-- Dropdown de Campos de Formulário -->
+        <div class="dropdown-wrap">
+          <button class="tool-btn" id="btnFormTool" data-tool="form" title="Campos de Formulário AcroForm">
+            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 9h10M7 13h6M7 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            <span>Formulário ▾</span>
+          </button>
+          <div class="dropdown-menu" id="formDropdown">
+            <button class="dropdown-item" data-form-type="text">Campo de Texto (Input)</button>
+            <button class="dropdown-item" data-form-type="checkbox">Caixa de Seleção (Checkbox)</button>
+            <button class="dropdown-item" data-form-type="radio">Botão de Opção (Radio)</button>
+            <button class="dropdown-item" data-form-type="dropdown">Lista Suspensa (Dropdown)</button>
+            <button class="dropdown-item" data-form-type="signature">Campo de Assinatura</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="ribbon-divider"></div>
+
+      <!-- Grupo 2: Formatação de Texto -->
+      <div class="ribbon-section format-section" aria-label="Formatação de texto">
+        <select id="fmtFontFamily" class="ctrl-select font-select" title="Família da Fonte" aria-label="Fonte">
+          <option value="Helvetica, Arial, sans-serif">Helvetica / Arial</option>
+          <option value="'Times New Roman', Times, serif">Times New Roman</option>
+          <option value="'Courier New', Courier, monospace">Courier New</option>
+          <option value="Georgia, serif">Georgia</option>
+          <option value="Verdana, Geneva, sans-serif">Verdana</option>
+          <option value="'Trebuchet MS', sans-serif">Trebuchet MS</option>
+        </select>
+
+        <div class="size-control" title="Tamanho da Fonte (pt)">
+          <input id="fmtFontSize" class="ctrl-number" type="number" min="5" max="144" step="0.5" value="12" aria-label="Tamanho da fonte" />
+          <span class="unit">pt</span>
+        </div>
+
+        <label class="color-swatch" title="Cor do Texto">
+          <span class="color-label">A</span>
+          <input id="fmtTextColor" type="color" value="#111111" aria-label="Cor do texto" />
+        </label>
+
+        <label class="color-swatch" title="Cor de Fundo / Máscara">
+          <span class="color-label bg-icon">■</span>
+          <input id="fmtBgColor" type="color" value="#ffffff" aria-label="Cor de fundo" />
+        </label>
+
+        <button id="fmtBgTransparent" class="fmt-btn active" title="Fundo Transparente (sem preenchimento)">
+          <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="4" y1="20" x2="20" y2="4" stroke="#ef4444" stroke-width="2"/></svg>
+        </button>
+
+        <div class="btn-group">
+          <button id="fmtBold" class="fmt-btn" title="Negrito (Ctrl+B)"><strong>B</strong></button>
+          <button id="fmtItalic" class="fmt-btn" title="Itálico (Ctrl+I)"><em>I</em></button>
+          <button id="fmtUnderline" class="fmt-btn" title="Sublinhado (Ctrl+U)"><u>U</u></button>
+          <button id="fmtStrike" class="fmt-btn" title="Tachado"><s>S</s></button>
+        </div>
+
+        <div class="btn-group">
+          <button class="fmt-btn align-btn active" data-align="left" title="Alinhar à Esquerda">
+            <svg viewBox="0 0 24 24"><path d="M4 6h16M4 10h11M4 14h16M4 18h11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+          <button class="fmt-btn align-btn" data-align="center" title="Centralizar">
+            <svg viewBox="0 0 24 24"><path d="M4 6h16M7 10h10M4 14h16M7 18h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+          <button class="fmt-btn align-btn" data-align="right" title="Alinhar à Direita">
+            <svg viewBox="0 0 24 24"><path d="M4 6h16M9 10h11M4 14h16M9 18h11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+          <button class="fmt-btn align-btn" data-align="justify" title="Justificar">
+            <svg viewBox="0 0 24 24"><path d="M4 6h16M4 10h16M4 14h16M4 18h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+
+        <select id="fmtLineHeight" class="ctrl-select line-height-select" title="Espaçamento entre Linhas" aria-label="Espaçamento entre linhas">
+          <option value="1.0">1.0×</option>
+          <option value="1.15" selected>1.15×</option>
+          <option value="1.25">1.25×</option>
+          <option value="1.4">1.4×</option>
+          <option value="1.5">1.5×</option>
+          <option value="1.75">1.75×</option>
+          <option value="2.0">2.0×</option>
+        </select>
+      </div>
+
+      <div class="ribbon-divider"></div>
+
+      <!-- Grupo 3: Estilo de Desenho, Formas e Destaque -->
+      <div class="ribbon-section style-section" aria-label="Estilo de anotações e formas">
+        <label class="color-swatch" title="Cor do Traço / Destaque">
+          <span class="color-label">✎</span>
+          <input id="styleStrokeColor" type="color" value="#2563eb" aria-label="Cor do traço" />
+        </label>
+
+        <div class="size-control" title="Espessura do Traço (px)">
+          <input id="styleStrokeWidth" class="ctrl-number" type="number" min="1" max="32" value="2" aria-label="Espessura do traço" />
+          <span class="unit">px</span>
+        </div>
+
+        <label class="color-swatch" title="Cor de Destaque (Marca-texto)">
+          <span class="color-label">🖍</span>
+          <input id="styleHighlightColor" type="color" value="#fde047" aria-label="Cor do marca-texto" />
+        </label>
+
+        <div class="opacity-control" title="Opacidade">
+          <input id="styleOpacity" type="range" min="10" max="100" value="100" aria-label="Opacidade" />
+          <span id="styleOpacityVal" class="unit">100%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== CORPO PRINCIPAL ==================== -->
+    <div class="workspace-body">
+      <!-- Painel Lateral Esquerdo (Miniaturas / Camadas / Comentários) -->
+      <aside id="leftSidebar" class="sidebar sidebar-left" aria-label="Painel de navegação">
+        <div class="sidebar-tabs" role="tablist">
+          <button class="sidebar-tab active" data-tab="thumbnails" role="tab" aria-selected="true">Miniaturas</button>
+          <button class="sidebar-tab" data-tab="layers" role="tab" aria-selected="false">Objetos</button>
+          <button class="sidebar-tab" data-tab="comments" role="tab" aria-selected="false">Comentários</button>
+        </div>
+
+        <div id="tabThumbnails" class="sidebar-pane active">
+          <div id="thumbnailsList" class="thumbnails-list">
+            <div class="empty-hint">Carregue um PDF para visualizar as miniaturas das páginas.</div>
+          </div>
+        </div>
+
+        <div id="tabLayers" class="sidebar-pane">
+          <div class="pane-header">
+            <span>Elementos editáveis</span>
+            <span id="layersCountBadge" class="badge">0</span>
+          </div>
+          <div id="layersList" class="layers-list">
+            <div class="empty-hint">Nenhum objeto ou edição nesta página.</div>
+          </div>
+        </div>
+
+        <div id="tabComments" class="sidebar-pane">
+          <div class="pane-header">
+            <span>Anotações e Comentários</span>
+            <span id="commentsCountBadge" class="badge">0</span>
+          </div>
+          <div id="commentsList" class="comments-list">
+            <div class="empty-hint">Use a ferramenta Comentário para adicionar notas ao documento.</div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Área Central de Visualização e Edição -->
+      <main id="viewport" class="editor-viewport" tabindex="0">
+        <!-- Tela de Boas-vindas (antes de abrir PDF) -->
+        <section id="welcomeScreen" class="welcome-screen">
+          <div class="welcome-card" id="welcomeDropzone">
+            <div class="welcome-icon">
+              <svg viewBox="0 0 64 64">
+                <path d="M16 8h22l14 14v34a4 4 0 0 1-4 4H16a4 4 0 0 1-4-4V12a4 4 0 0 1 4-4z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+                <polyline points="38 8 38 22 52 22" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+                <text x="32" y="44" text-anchor="middle" font-size="14" font-weight="700" fill="currentColor" font-family="sans-serif">PDF</text>
+              </svg>
+            </div>
+            <h1>Editor Profissional de PDF</h1>
+            <p class="welcome-subtitle">
+              Edite textos inline, imagens, formulários, anotações e assinaturas preservando 100% da estrutura, tabelas, fontes e layout original do PDF — totalmente no navegador.
+            </p>
+
+            <div class="welcome-actions">
+              <button id="btnWelcomeOpen" class="btn btn-primary btn-lg">
+                <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" fill="none" stroke="currentColor" stroke-width="2"/><polyline points="17 8 12 3 7 8" fill="none" stroke="currentColor" stroke-width="2"/><line x1="12" y1="3" x2="12" y2="15" stroke="currentColor" stroke-width="2"/></svg>
+                <span>Selecionar Arquivo PDF</span>
+              </button>
+              <button id="btnCreateSample" class="btn btn-secondary btn-lg">
+                <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="none" stroke="currentColor" stroke-width="2"/><polyline points="14 2 14 8 20 8" fill="none" stroke="currentColor" stroke-width="2"/><line x1="12" y1="18" x2="12" y2="12" stroke="currentColor" stroke-width="2"/><line x1="9" y1="15" x2="15" y2="15" stroke="currentColor" stroke-width="2"/></svg>
+                <span>Abrir PDF de Demonstração</span>
+              </button>
+              <button id="btnCreateBlank" class="btn btn-ghost btn-lg">Novo PDF em Branco</button>
+            </div>
+
+            <p class="drop-hint">Ou arraste e solte qualquer arquivo <strong>.pdf</strong> aqui</p>
+
+            <div class="feature-grid">
+              <div class="feature-chip"><strong>Layout Intacto</strong><span>Camada exata sobre o PDF original</span></div>
+              <div class="feature-chip"><strong>Edição Inline</strong><span>Clique direto em qualquer texto</span></div>
+              <div class="feature-chip"><strong>Formulários & Assinatura</strong><span>AcroForm interativo e assinatura digital</span></div>
+              <div class="feature-chip"><strong>Exportação 3 Modos</strong><span>Original, Editável ou Final</span></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Container das Páginas Renderizadas -->
+        <div id="pagesContainer" class="pages-container" hidden></div>
+
+        <!-- Overlay Global de Drag & Drop -->
+        <div id="dropOverlay" class="drop-overlay" hidden>
+          <div class="drop-overlay-box">
+            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" fill="none" stroke="currentColor" stroke-width="2"/><polyline points="17 8 12 3 7 8" fill="none" stroke="currentColor" stroke-width="2"/><line x1="12" y1="3" x2="12" y2="15" stroke="currentColor" stroke-width="2"/></svg>
+            <p>Solte o arquivo PDF para abrir no editor</p>
+          </div>
+        </div>
+      </main>
+
+      <!-- Painel Lateral Direito (Inspetor de Propriedades) -->
+      <aside id="rightSidebar" class="sidebar sidebar-right" aria-label="Propriedades do elemento">
+        <div class="pane-header">
+          <span>Propriedades</span>
+          <span id="selectedTypeBadge" class="badge muted">Nenhum</span>
+        </div>
+
+        <div id="inspectorEmpty" class="inspector-empty">
+          <p>Selecione um texto, imagem, forma, assinatura ou campo de formulário para ajustar suas propriedades precisas.</p>
+          <div class="shortcuts-box">
+            <h4>Atalhos Rápidos</h4>
+            <ul>
+              <li><kbd>V</kbd> Selecionar / Mover</li>
+              <li><kbd>T</kbd> Editar Texto do PDF</li>
+              <li><kbd>X</kbd> Nova Caixa de Texto</li>
+              <li><kbd>H</kbd> Destacar Texto</li>
+              <li><kbd>D</kbd> Desenho Livre</li>
+              <li><kbd>Ctrl+Z</kbd> / <kbd>Y</kbd> Desfazer / Refazer</li>
+              <li><kbd>Ctrl+D</kbd> Duplicar</li>
+              <li><kbd>Del</kbd> Excluir</li>
+              <li><kbd>Ctrl+Scroll</kbd> Zoom</li>
+            </ul>
+          </div>
+        </div>
+
+        <div id="inspectorContent" class="inspector-content" hidden>
+          <!-- Geometria -->
+          <div class="prop-group">
+            <div class="prop-group-title">Posição e Dimensões (pt)</div>
+            <div class="prop-grid-2">
+              <label class="prop-field">
+                <span>X</span>
+                <input id="propX" type="number" step="0.5" />
+              </label>
+              <label class="prop-field">
+                <span>Y</span>
+                <input id="propY" type="number" step="0.5" />
+              </label>
+              <label class="prop-field">
+                <span>Largura</span>
+                <input id="propW" type="number" min="4" step="0.5" />
+              </label>
+              <label class="prop-field">
+                <span>Altura</span>
+                <input id="propH" type="number" min="4" step="0.5" />
+              </label>
+              <label class="prop-field">
+                <span>Rotação (°)</span>
+                <input id="propRotation" type="number" min="-360" max="360" step="1" />
+              </label>
+              <label class="prop-field">
+                <span>Opacidade (%)</span>
+                <input id="propOpacity" type="number" min="5" max="100" step="5" />
+              </label>
+            </div>
+          </div>
+
+          <!-- Propriedades Específicas de Texto Original Editado -->
+          <div id="propOriginalTextGroup" class="prop-group" hidden>
+            <div class="prop-group-title">Preservação de Texto Original</div>
+            <label class="prop-field full">
+              <span>Cor da Máscara de Fundo</span>
+              <div class="inline-row">
+                <input id="propMaskColor" type="color" value="#ffffff" />
+                <button id="btnAutoMaskColor" class="btn btn-xs btn-secondary" type="button">Amostrar Fundo</button>
+              </div>
+            </label>
+            <button id="btnRestoreOriginalText" class="btn btn-xs btn-ghost full-width" type="button">Restaurar Texto Original do PDF</button>
+          </div>
+
+          <!-- Propriedades de Forma / Desenho -->
+          <div id="propShapeGroup" class="prop-group" hidden>
+            <div class="prop-group-title">Aparência Vetorial</div>
+            <div class="prop-grid-2">
+              <label class="prop-field">
+                <span>Cor Traço</span>
+                <input id="propStrokeColor" type="color" value="#2563eb" />
+              </label>
+              <label class="prop-field">
+                <span>Espessura</span>
+                <input id="propStrokeWidth" type="number" min="0" max="40" step="1" value="2" />
+              </label>
+              <label class="prop-field">
+                <span>Preenchimento</span>
+                <input id="propFillColor" type="color" value="#3b82f6" />
+              </label>
+              <label class="prop-field checkbox-field">
+                <input id="propFillTransparent" type="checkbox" checked />
+                <span>Sem fundo</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Propriedades de Imagem -->
+          <div id="propImageGroup" class="prop-group" hidden>
+            <div class="prop-group-title">Imagem</div>
+            <label class="prop-field checkbox-field">
+              <input id="propLockAspect" type="checkbox" checked />
+              <span>Manter proporção ao redimensionar</span>
+            </label>
+          </div>
+
+          <!-- Propriedades de Comentário -->
+          <div id="propCommentGroup" class="prop-group" hidden>
+            <div class="prop-group-title">Comentário</div>
+            <label class="prop-field full">
+              <span>Autor</span>
+              <input id="propCommentAuthor" type="text" placeholder="Seu nome" />
+            </label>
+            <label class="prop-field full">
+              <span>Texto do Comentário</span>
+              <textarea id="propCommentText" rows="4" placeholder="Escreva sua anotação..."></textarea>
+            </label>
+          </div>
+
+          <!-- Propriedades de Campo de Formulário -->
+          <div id="propFormGroup" class="prop-group" hidden>
+            <div class="prop-group-title">Campo de Formulário (AcroForm)</div>
+            <label class="prop-field full">
+              <span>Nome do Campo</span>
+              <input id="propFormName" type="text" placeholder="ex: nome_completo" />
+            </label>
+            <label id="propFormValueWrap" class="prop-field full">
+              <span>Valor / Texto Padrão</span>
+              <input id="propFormValue" type="text" placeholder="Texto inicial..." />
+            </label>
+            <label id="propFormGroupWrap" class="prop-field full" hidden>
+              <span>Grupo de Rádio</span>
+              <input id="propFormRadioGroup" type="text" placeholder="grupo_opcao_1" />
+            </label>
+            <label id="propFormOptionsWrap" class="prop-field full" hidden>
+              <span>Opções (uma por linha)</span>
+              <textarea id="propFormOptions" rows="4" placeholder="Opção 1&#10;Opção 2&#10;Opção 3"></textarea>
+            </label>
+            <label id="propFormCheckedWrap" class="prop-field checkbox-field" hidden>
+              <input id="propFormChecked" type="checkbox" />
+              <span>Marcado por padrão</span>
+            </label>
+            <label class="prop-field checkbox-field">
+              <input id="propFormRequired" type="checkbox" />
+              <span>Campo obrigatório</span>
+            </label>
+          </div>
+
+          <!-- Ações do Elemento -->
+          <div class="prop-group">
+            <div class="prop-group-title">Ações do Elemento</div>
+            <div class="action-grid">
+              <button id="btnPropDuplicate" class="btn btn-xs btn-secondary" type="button">Duplicar</button>
+              <button id="btnPropBringFront" class="btn btn-xs btn-secondary" type="button">Trazer p/ Frente</button>
+              <button id="btnPropSendBack" class="btn btn-xs btn-secondary" type="button">Enviar p/ Trás</button>
+              <button id="btnPropDelete" class="btn btn-xs btn-danger" type="button">Excluir</button>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- ==================== BARRA DE STATUS ==================== -->
+    <footer class="status-bar">
+      <div class="status-left">
+        <span id="statusToolBadge" class="status-pill">Ferramenta: Selecionar</span>
+        <span id="statusHint" class="status-hint">Clique em qualquer elemento para selecionar ou mude para "Editar Texto" para editar diretamente o PDF.</span>
+      </div>
+      <div class="status-right">
+        <span id="statusCoords">X: — pt · Y: — pt</span>
+        <span class="status-sep">|</span>
+        <span id="statusPageSize">Página: —</span>
+        <span class="status-sep">|</span>
+        <span id="statusEditCount">0 edições</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- ==================== MODAL: ASSINATURA DIGITAL ==================== -->
+  <div id="signatureModal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="sigModalTitle">
+    <div class="modal-card modal-md">
+      <div class="modal-header">
+        <h2 id="sigModalTitle">Assinatura Digital</h2>
+        <button class="icon-btn modal-close" data-close-modal="signatureModal" aria-label="Fechar">&times;</button>
+      </div>
+
+      <div class="modal-tabs">
+        <button class="modal-tab active" data-sig-tab="draw">Desenhar</button>
+        <button class="modal-tab" data-sig-tab="type">Digitar</button>
+        <button class="modal-tab" data-sig-tab="upload">Carregar Imagem</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Aba Desenhar -->
+        <div id="sigTabDraw" class="sig-pane active">
+          <div class="sig-controls">
+            <label>Cor da tinta: <input id="sigInkColor" type="color" value="#0f172a" /></label>
+            <label>Espessura: <input id="sigInkWidth" type="range" min="1" max="8" value="2.5" step="0.5" /></label>
+            <button id="btnSigClear" class="btn btn-xs btn-secondary" type="button">Limpar</button>
+          </div>
+          <div class="sig-canvas-wrap">
+            <canvas id="sigCanvas" width="520" height="190"></canvas>
+            <span class="sig-guide-line">Assine acima desta linha</span>
+          </div>
+        </div>
+
+        <!-- Aba Digitar -->
+        <div id="sigTabType" class="sig-pane">
+          <label class="prop-field full">
+            <span>Digite seu nome</span>
+            <input id="sigTypeInput" type="text" placeholder="Ex.: Maria Oliveira" />
+          </label>
+          <div class="sig-controls">
+            <label>Cor: <input id="sigTypeColor" type="color" value="#0f172a" /></label>
+          </div>
+          <div id="sigFontPreviews" class="sig-font-grid">
+            <button type="button" class="sig-font-opt active" data-font="italic 42px 'Brush Script MT', 'Segoe Script', cursive">Sua Assinatura</button>
+            <button type="button" class="sig-font-opt" data-font="italic 36px 'Georgia', serif">Sua Assinatura</button>
+            <button type="button" class="sig-font-opt" data-font="italic 38px 'Lucida Handwriting', 'Comic Sans MS', cursive">Sua Assinatura</button>
+            <button type="button" class="sig-font-opt" data-font="600 italic 34px 'Palatino Linotype', serif">Sua Assinatura</button>
+          </div>
+        </div>
+
+        <!-- Aba Upload -->
+        <div id="sigTabUpload" class="sig-pane">
+          <div class="upload-box">
+            <input id="sigImageUpload" type="file" accept="image/png,image/jpeg,image/webp" />
+            <p>Envie uma imagem PNG/JPG da sua assinatura (preferencialmente com fundo transparente).</p>
+            <img id="sigUploadPreview" alt="Prévia da assinatura" hidden />
+          </div>
+        </div>
+
+        <!-- Assinaturas Salvas -->
+        <div id="savedSignaturesWrap" class="saved-sigs" hidden>
+          <div class="prop-group-title">Assinaturas Salvas na Sessão</div>
+          <div id="savedSignaturesList" class="saved-sigs-list"></div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-ghost" data-close-modal="signatureModal" type="button">Cancelar</button>
+        <button id="btnSigInsert" class="btn btn-primary" type="button">Inserir Assinatura no PDF</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== MODAL: EXPORTAR PDF ==================== -->
+  <div id="exportModal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
+    <div class="modal-card modal-md">
+      <div class="modal-header">
+        <h2 id="exportModalTitle">Exportar Documento PDF</h2>
+        <button class="icon-btn modal-close" data-close-modal="exportModal" aria-label="Fechar">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <label class="prop-field full">
+          <span>Nome do Arquivo</span>
+          <input id="exportFileName" type="text" value="documento-editado.pdf" />
+        </label>
+
+        <div class="export-modes">
+          <label class="export-card selected">
+            <input type="radio" name="exportMode" value="preserve" checked />
+            <div class="export-card-body">
+              <strong>PDF Preservando Layout Original (Recomendado)</strong>
+              <p>Mantém 100% dos vetores, tabelas, imagens e fontes originais do PDF via <code>pdf-lib</code> e aplica apenas suas edições em coordenadas exatas.</p>
+            </div>
+          </label>
+
+          <label class="export-card">
+            <input type="radio" name="exportMode" value="editable" />
+            <div class="export-card-body">
+              <strong>PDF Editável (AcroForm + Projeto Reeditável)</strong>
+              <p>Mantém campos de formulário interativos preenchíveis e embute os metadados de camadas editáveis para reabrir este PDF e continuar editando depois.</p>
+            </div>
+          </label>
+
+          <label class="export-card">
+            <input type="radio" name="exportMode" value="final" />
+            <div class="export-card-body">
+              <strong>PDF Final (Achatado / Fidelidade Visual Máxima)</strong>
+              <p>Achata todos os campos, edições, fontes web, destaques e assinaturas em um documento final pronto para envio ou impressão, impedindo alterações acidentais.</p>
+            </div>
+          </label>
+        </div>
+
+        <div id="finalQualityWrap" class="prop-group" hidden>
+          <label class="prop-field full">
+            <span>Modo de Achatamento do PDF Final</span>
+            <select id="finalFlattenStrategy" class="ctrl-select">
+              <option value="vector-flatten">Vetorial Achatado (texto selecionável, menor arquivo)</option>
+              <option value="high-dpi" selected>Alta Fidelidade Visual 2.5× DPI (aparência 100% idêntica à tela)</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="exportProgressWrap" class="progress-wrap" hidden>
+          <div class="progress-bar"><div id="exportProgressFill" class="progress-fill"></div></div>
+          <span id="exportProgressText">Preparando exportação...</span>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-ghost" data-close-modal="exportModal" type="button">Cancelar</button>
+        <button id="btnConfirmExport" class="btn btn-primary" type="button">Baixar PDF</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== MODAL: OCR ==================== -->
+  <div id="ocrModal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="ocrModalTitle">
+    <div class="modal-card modal-sm">
+      <div class="modal-header">
+        <h2 id="ocrModalTitle">OCR — Reconhecimento de Texto</h2>
+        <button class="icon-btn modal-close" data-close-modal="ocrModal" aria-label="Fechar">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">Use o OCR (Tesseract.js) quando o PDF for digitalizado (imagem) e não possuir camada de texto nativa. Os blocos detectados ficarão editáveis sobre a página.</p>
+        <label class="prop-field full">
+          <span>Idioma do Documento</span>
+          <select id="ocrLang" class="ctrl-select">
+            <option value="por" selected>Português (Brasil / Portugal)</option>
+            <option value="eng">Inglês</option>
+            <option value="spa">Espanhol</option>
+          </select>
+        </label>
+        <label class="prop-field full">
+          <span>Escopo</span>
+          <select id="ocrScope" class="ctrl-select">
+            <option value="current" selected>Apenas Página Atual</option>
+            <option value="all">Todas as Páginas</option>
+          </select>
+        </label>
+        <div id="ocrProgressWrap" class="progress-wrap" hidden>
+          <div class="progress-bar"><div id="ocrProgressFill" class="progress-fill"></div></div>
+          <span id="ocrProgressText">Inicializando motor OCR...</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" data-close-modal="ocrModal" type="button">Fechar</button>
+        <button id="btnStartOcr" class="btn btn-primary" type="button">Iniciar OCR</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== MENU DE CONTEXTO ==================== -->
+  <div id="contextMenu" class="context-menu" hidden role="menu">
+    <button class="ctx-item" data-ctx="edit">Editar Conteúdo</button>
+    <button class="ctx-item" data-ctx="copy">Copiar <kbd>Ctrl+C</kbd></button>
+    <button class="ctx-item" data-ctx="cut">Recortar <kbd>Ctrl+X</kbd></button>
+    <button class="ctx-item" data-ctx="paste">Colar <kbd>Ctrl+V</kbd></button>
+    <button class="ctx-item" data-ctx="duplicate">Duplicar <kbd>Ctrl+D</kbd></button>
+    <div class="ctx-sep"></div>
+    <button class="ctx-item" data-ctx="front">Trazer para Frente</button>
+    <button class="ctx-item" data-ctx="back">Enviar para Trás</button>
+    <div class="ctx-sep"></div>
+    <button class="ctx-item danger" data-ctx="delete">Excluir <kbd>Del</kbd></button>
+  </div>
+
+  <!-- ==================== NOTIFICAÇÕES TOAST ==================== -->
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
