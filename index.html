@@ -1,74 +1,55 @@
 <!DOCTYPE html>
-<html lang="pt-BR" data-theme="dark">
+<html lang="pt-BR" data-theme="light">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PDF Studio Pro — Editor Profissional de PDF</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="theme-color" content="#10233d" />
+  <meta name="description" content="Assine, preencha e corrija PDFs direto no navegador." />
+  <title>PDF Studio Pro — editor de PDF no navegador</title>
+  <script>
+    // Define o tema antes de desenhar a tela, para não piscar
+    (function () {
+      var saved;
+      try { saved = localStorage.getItem('pdf-studio-theme'); } catch (e) {}
+      var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      document.documentElement.dataset.theme = saved || (dark ? 'dark' : 'light');
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400..900&display=swap" />
   <link rel="stylesheet" href="style.css" />
 
   <!-- PDF.js 3.11.174 (UMD: compatível com file:// e servidores HTTP) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <!-- pdf-lib 1.17.1 para manipulação vetorial e exportação fiel de PDF -->
-  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <script defer src="script.js"></script>
 </head>
 <body>
-  <div id="app" class="app-shell">
-    <!-- ==================== BARRA SUPERIOR PRINCIPAL ==================== -->
+  <div id="app" class="app-shell no-doc">
+    <!-- ==================== BARRA SUPERIOR ==================== -->
     <header class="top-bar" role="banner">
       <div class="top-bar-left">
-        <button id="btnToggleLeftSidebar" class="icon-btn" title="Alternar Painel Lateral" aria-label="Alternar Painel Lateral">
-          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="9" y1="4" x2="9" y2="20" stroke="currentColor" stroke-width="1.8"/></svg>
-        </button>
-
-        <div class="brand">
-          <div class="brand-badge" aria-hidden="true">PDF</div>
-          <div class="brand-info">
-            <span class="brand-title">PDF Studio Pro</span>
-            <input id="docTitleInput" class="doc-title-input" type="text" value="Nenhum documento aberto" title="Nome do arquivo ao exportar" aria-label="Nome do documento" />
-          </div>
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="8" fill="#ffffff"/>
+          <path d="M8 24V11a3 3 0 0 1 3-3h13" fill="none" stroke="#1668dc" stroke-width="4" stroke-linecap="round"/>
+          <path d="M8 24h7a3 3 0 0 0 3-3v-3a3 3 0 0 1 3-3h3" fill="none" stroke="#0e8a50" stroke-width="4" stroke-linecap="round"/>
+          <circle cx="24" cy="8" r="3" fill="#ffffff" stroke="#10233d" stroke-width="2"/>
+          <circle cx="24" cy="15" r="3" fill="#ffffff" stroke="#10233d" stroke-width="2"/>
+        </svg>
+        <div class="brand-info">
+          <span class="brand-title">PDF Studio Pro</span>
+          <input id="docTitleInput" class="doc-title-input" type="text" value="Nenhum documento aberto" title="Nome do arquivo ao baixar" aria-label="Nome do documento" />
         </div>
-
-        <div class="toolbar-divider"></div>
-
-        <button id="btnOpenPdf" class="btn btn-secondary" title="Abrir arquivo PDF (Ctrl+O)">
+        <button id="btnOpenPdf" class="btn btn-bar" title="Abrir arquivo PDF (Ctrl+O)">
           <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
           <span>Abrir PDF</span>
         </button>
         <input id="pdfFileInput" type="file" accept="application/pdf,.pdf" hidden />
         <input id="imageFileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
-
-        <div class="toolbar-divider"></div>
-
-        <div class="btn-group" role="group" aria-label="Histórico">
-          <button id="btnUndo" class="icon-btn" title="Desfazer (Ctrl+Z)" disabled>
-            <svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9h10a6 6 0 1 1 0 12h-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          </button>
-          <button id="btnRedo" class="icon-btn" title="Refazer (Ctrl+Y)" disabled>
-            <svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 9H10a6 6 0 1 0 0 12h3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          </button>
-        </div>
-
-        <div class="btn-group hide-sm" role="group" aria-label="Área de transferência">
-          <button id="btnCut" class="icon-btn" title="Recortar (Ctrl+X)">
-            <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="20" y1="4" x2="8.12" y2="15.88" stroke="currentColor" stroke-width="1.8"/><line x1="14.47" y1="14.48" x2="20" y2="20" stroke="currentColor" stroke-width="1.8"/><line x1="8.12" y1="8.12" x2="12" y2="12" stroke="currentColor" stroke-width="1.8"/></svg>
-          </button>
-          <button id="btnCopy" class="icon-btn" title="Copiar (Ctrl+C)">
-            <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
-          </button>
-          <button id="btnPaste" class="icon-btn" title="Colar (Ctrl+V)">
-            <svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="8" y="2" width="8" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
-          </button>
-          <button id="btnDuplicate" class="icon-btn" title="Duplicar elemento (Ctrl+D)">
-            <svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="14" y1="11" x2="14" y2="17" stroke="currentColor" stroke-width="1.8"/><line x1="11" y1="14" x2="17" y2="14" stroke="currentColor" stroke-width="1.8"/></svg>
-          </button>
-          <button id="btnDeleteSelected" class="icon-btn danger-hover" title="Excluir selecionado (Delete)">
-            <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
-          </button>
-        </div>
       </div>
 
-      <!-- Navegação de Páginas e Zoom -->
       <div class="top-bar-center">
         <div class="nav-pill" role="group" aria-label="Navegação de páginas">
           <button id="btnPrevPage" class="icon-btn sm" title="Página Anterior (PageUp)" disabled>
@@ -80,7 +61,6 @@
             <svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6" fill="none" stroke="currentColor" stroke-width="2"/></svg>
           </button>
         </div>
-
         <div class="zoom-pill" role="group" aria-label="Controle de zoom">
           <button id="btnZoomOut" class="icon-btn sm" title="Diminuir Zoom (Ctrl+-)" disabled>
             <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2"/></svg>
@@ -103,91 +83,62 @@
         </div>
       </div>
 
-      <!-- Ações Finais -->
       <div class="top-bar-right">
-        <button id="btnRunOcr" class="btn btn-ghost hide-md" title="Executar OCR para reconhecer texto em PDFs escaneados" disabled>
+        <div class="btn-group" role="group" aria-label="Histórico">
+          <button id="btnUndo" class="icon-btn" title="Desfazer (Ctrl+Z)" disabled>
+            <svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9h10a6 6 0 1 1 0 12h-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+          <button id="btnRedo" class="icon-btn" title="Refazer (Ctrl+Y)" disabled>
+            <svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 9H10a6 6 0 1 0 0 12h3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <button id="btnRunOcr" class="btn btn-bar" title="Executar OCR para reconhecer texto em PDFs escaneados" disabled>
           <svg viewBox="0 0 24 24"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="7" y1="12" x2="17" y2="12" stroke="currentColor" stroke-width="1.8"/><line x1="9" y1="9" x2="15" y2="9" stroke="currentColor" stroke-width="1.6"/><line x1="9" y1="15" x2="13" y2="15" stroke="currentColor" stroke-width="1.6"/></svg>
-          <span>OCR</span>
+          <span>Ler texto (OCR)</span>
         </button>
-
-        <button id="btnOpenExport" class="btn btn-primary" title="Exportar PDF (Ctrl+S)" disabled>
-          <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><polyline points="7 10 12 15 17 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          <span>Exportar PDF</span>
-        </button>
-
         <button id="btnToggleTheme" class="icon-btn" title="Alternar Tema Claro/Escuro" aria-label="Alternar tema">
-          <svg id="iconSun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
         </button>
-
-        <button id="btnToggleRightPanel" class="icon-btn" title="Alternar Painel de Propriedades" aria-label="Alternar Painel de Propriedades">
+        <button id="btnToggleLeftSidebar" class="only-desktop icon-btn" title="Alternar Painel Lateral" aria-label="Alternar Painel Lateral">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="9" y1="4" x2="9" y2="20" stroke="currentColor" stroke-width="1.8"/></svg>
+        </button>
+        <button id="btnToggleRightPanel" class="only-desktop icon-btn" title="Alternar Painel de Propriedades" aria-label="Alternar Painel de Propriedades">
           <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="15" y1="4" x2="15" y2="20" stroke="currentColor" stroke-width="1.8"/></svg>
+        </button>
+        <button id="btnOpenExport" class="btn btn-export" title="Baixar PDF (Ctrl+S)" disabled>
+          <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><polyline points="7 10 12 15 17 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>Baixar</span>
         </button>
       </div>
     </header>
 
-    <!-- ==================== BARRA DE FERRAMENTAS & FORMATAÇÃO ==================== -->
-    <div class="ribbon-bar" role="toolbar" aria-label="Ferramentas de edição e formatação">
-      <!-- Grupo 1: Ferramentas Principais -->
-      <div class="ribbon-section" aria-label="Ferramentas">
-        <button class="tool-btn active" data-tool="select" title="Selecionar e Mover Objetos (V)">
+    <!-- ==================== CORPO ==================== -->
+    <div class="workspace-body">
+      <nav class="tool-rail" role="toolbar" aria-label="Ferramentas" aria-orientation="vertical">
+        <div class="rail-group" data-line="move" role="group" aria-label="Mover">
+          <span class="rail-title">Mover</span>
+          <button class="tool-btn active" data-tool="select" title="Selecionar e Mover Objetos (V)">
           <svg viewBox="0 0 24 24"><path d="M5 3l14 9-6.5 1.5L9 20 5 3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-          <span>Selecionar</span>
+          <span>Mover</span>
         </button>
-
-        <button class="tool-btn" data-tool="edit-text" title="Editar Texto Original do PDF (T)">
-          <svg viewBox="0 0 24 24"><path d="M4 7V4h16v3M12 4v16M9 20h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <span>Editar Texto</span>
-        </button>
-
-        <button class="tool-btn" data-tool="textbox" title="Adicionar Caixa de Texto (X)">
-          <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2"/><path d="M8 9h8M12 9v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          <span>Caixa Texto</span>
-        </button>
-
-        <button class="tool-btn" data-tool="highlight" title="Destacar Texto (H)">
-          <svg viewBox="0 0 24 24"><path d="M9 11l-6 6v3h9l3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M22 12l-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-          <span>Destacar</span>
-        </button>
-
-        <button class="tool-btn" data-tool="comment" title="Adicionar Comentário (C)">
-          <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-          <span>Comentário</span>
-        </button>
-
-        <button class="tool-btn" data-tool="draw" title="Desenho à Mão Livre (D)">
-          <svg viewBox="0 0 24 24"><path d="M12 20h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-          <span>Desenhar</span>
-        </button>
-
-        <!-- Dropdown de Formas -->
-        <div class="dropdown-wrap">
-          <button class="tool-btn" id="btnShapeTool" data-tool="shape" title="Formas Geométricas (S)">
-            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="11" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="16.5" cy="16.5" r="4.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
-            <span>Formas ▾</span>
-          </button>
-          <div class="dropdown-menu" id="shapeDropdown">
-            <button class="dropdown-item" data-shape="rect">Retângulo</button>
-            <button class="dropdown-item" data-shape="ellipse">Elipse / Círculo</button>
-            <button class="dropdown-item" data-shape="line">Linha</button>
-            <button class="dropdown-item" data-shape="arrow">Seta</button>
-          </div>
         </div>
-
-        <button class="tool-btn" id="btnInsertImage" data-tool="image" title="Inserir Imagem (I)">
-          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="8.5" cy="9.5" r="1.5" fill="currentColor"/><path d="M21 15l-5-5L5 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-          <span>Imagem</span>
+        <div class="rail-group" data-line="text" role="group" aria-label="Corrigir">
+          <span class="rail-title">Corrigir</span>
+          <button class="tool-btn" data-tool="edit-text" title="Editar Texto Original do PDF (T)">
+          <svg viewBox="0 0 24 24"><path d="M4 7V4h16v3M12 4v16M9 20h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Texto</span>
         </button>
-
-        <button class="tool-btn" id="btnOpenSignature" data-tool="signature" title="Assinatura">
-          <svg viewBox="0 0 24 24"><path d="M3 17c2-4 4-8 6-8s1 6 3 6 3-5 5-5 2 3 4 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="3" y1="20" x2="21" y2="20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          <span>Assinatura</span>
+        </div>
+        <div class="rail-group" data-line="mark" role="group" aria-label="Preencher">
+          <span class="rail-title">Preencher</span>
+          <button class="tool-btn" data-tool="textbox" title="Adicionar Caixa de Texto (X)">
+          <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2"/><path d="M8 9h8M12 9v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>Escrever</span>
         </button>
-
-        <!-- Dropdown de Campos de Formulário -->
-        <div class="dropdown-wrap">
+          <div class="dropdown-wrap">
           <button class="tool-btn" id="btnFormTool" data-tool="form" title="Campos de Formulário AcroForm">
             <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 9h10M7 13h6M7 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-            <span>Formulário ▾</span>
+            <span>Campos</span>
           </button>
           <div class="dropdown-menu" id="formDropdown">
             <button class="dropdown-item" data-form-type="text">Campo de Texto (Input)</button>
@@ -197,12 +148,110 @@
             <button class="dropdown-item" data-form-type="signature">Campo de Assinatura</button>
           </div>
         </div>
-      </div>
+        </div>
+        <div class="rail-group" data-line="sign" role="group" aria-label="Assinar">
+          <span class="rail-title">Assinar</span>
+          <button class="tool-btn" id="btnOpenSignature" data-tool="signature" title="Assinatura">
+          <svg viewBox="0 0 24 24"><path d="M3 17c2-4 4-8 6-8s1 6 3 6 3-5 5-5 2 3 4 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="3" y1="20" x2="21" y2="20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>Assinar</span>
+        </button>
+        </div>
+        <div class="rail-group" data-line="insert" role="group" aria-label="Marcar">
+          <span class="rail-title">Marcar</span>
+          <button class="tool-btn" data-tool="highlight" title="Destacar Texto (H)">
+          <svg viewBox="0 0 24 24"><path d="M9 11l-6 6v3h9l3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M22 12l-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>Destacar</span>
+        </button>
+          <button class="tool-btn" data-tool="comment" title="Adicionar Comentário (C)">
+          <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>Comentar</span>
+        </button>
+          <button class="tool-btn" data-tool="draw" title="Desenho à Mão Livre (D)">
+          <svg viewBox="0 0 24 24"><path d="M12 20h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>Desenhar</span>
+        </button>
+          <div class="dropdown-wrap">
+          <button class="tool-btn" id="btnShapeTool" data-tool="shape" title="Formas Geométricas (S)">
+            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="11" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="16.5" cy="16.5" r="4.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+            <span>Formas</span>
+          </button>
+          <div class="dropdown-menu" id="shapeDropdown">
+            <button class="dropdown-item" data-shape="rect">Retângulo</button>
+            <button class="dropdown-item" data-shape="ellipse">Elipse / Círculo</button>
+            <button class="dropdown-item" data-shape="line">Linha</button>
+            <button class="dropdown-item" data-shape="arrow">Seta</button>
+          </div>
+        </div>
+          <button class="tool-btn" id="btnInsertImage" data-tool="image" title="Inserir Imagem (I)">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="8.5" cy="9.5" r="1.5" fill="currentColor"/><path d="M21 15l-5-5L5 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>Imagem</span>
+        </button>
+        </div>
+      </nav>
 
-      <div class="ribbon-divider"></div>
+      <!-- Painel de páginas, objetos e comentários -->
+      <aside id="leftSidebar" class="sidebar sidebar-left" aria-label="Páginas, objetos e comentários">
+        <div class="sheet-grab" aria-hidden="true"></div>
+        <div class="sidebar-tabs" role="tablist">
+          <button class="sidebar-tab active" data-tab="thumbnails" role="tab" aria-selected="true">Miniaturas</button>
+          <button class="sidebar-tab" data-tab="layers" role="tab" aria-selected="false">Objetos</button>
+          <button class="sidebar-tab" data-tab="comments" role="tab" aria-selected="false">Comentários</button>
+          <button type="button" class="icon-btn sheet-close" aria-label="Fechar painel"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+        </div>
 
-      <!-- Grupo 2: Formatação de Texto -->
-      <div class="ribbon-section format-section" aria-label="Formatação de texto">
+        <div id="tabThumbnails" class="sidebar-pane active">
+          <div id="thumbnailsList" class="thumbnails-list">
+            <div class="empty-hint">Carregue um PDF para visualizar as miniaturas das páginas.</div>
+          </div>
+        </div>
+
+        <div id="tabLayers" class="sidebar-pane">
+          <div class="pane-header">
+            <span>Elementos editáveis</span>
+            <span id="layersCountBadge" class="badge">0</span>
+          </div>
+          <div id="layersList" class="layers-list">
+            <div class="empty-hint">Nenhum objeto ou edição nesta página.</div>
+          </div>
+        </div>
+
+        <div id="tabComments" class="sidebar-pane">
+          <div class="pane-header">
+            <span>Anotações e Comentários</span>
+            <span id="commentsCountBadge" class="badge">0</span>
+          </div>
+          <div id="commentsList" class="comments-list">
+            <div class="empty-hint">Use a ferramenta Comentário para adicionar notas ao documento.</div>
+          </div>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <!-- Faixa da ferramenta ativa: nome, instrução e opções que valem agora -->
+        <div id="contextBar" class="context-bar" role="toolbar" aria-label="Opções da ferramenta">
+          <div class="line-sign" aria-live="polite">
+            <span id="statusToolBadge" class="line-name">Mover</span>
+            <span id="statusHint" class="line-hint">Abra um PDF para começar.</span>
+          </div>
+          <div class="btn-group selection-actions" role="group" aria-label="Ações do elemento">
+              <button id="btnCut" class="icon-btn" title="Recortar (Ctrl+X)">
+            <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="20" y1="4" x2="8.12" y2="15.88" stroke="currentColor" stroke-width="1.8"/><line x1="14.47" y1="14.48" x2="20" y2="20" stroke="currentColor" stroke-width="1.8"/><line x1="8.12" y1="8.12" x2="12" y2="12" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+              <button id="btnCopy" class="icon-btn" title="Copiar (Ctrl+C)">
+            <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+              <button id="btnPaste" class="icon-btn" title="Colar (Ctrl+V)">
+            <svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="8" y="2" width="8" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+              <button id="btnDuplicate" class="icon-btn" title="Duplicar elemento (Ctrl+D)">
+            <svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="14" y1="11" x2="14" y2="17" stroke="currentColor" stroke-width="1.8"/><line x1="11" y1="14" x2="17" y2="14" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+              <button id="btnDeleteSelected" class="icon-btn danger-hover" title="Excluir selecionado (Delete)">
+            <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+            </div>
+          <div id="contextOptions" class="context-options">
+            <div class="ribbon-section format-section" aria-label="Formatação de texto">
         <select id="fmtFontFamily" class="ctrl-select font-select" title="Família da Fonte" aria-label="Fonte">
           <option value="Helvetica, Arial, sans-serif">Helvetica / Arial</option>
           <option value="'Times New Roman', Times, serif">Times New Roman</option>
@@ -263,11 +312,7 @@
           <option value="2.0">2.0×</option>
         </select>
       </div>
-
-      <div class="ribbon-divider"></div>
-
-      <!-- Grupo 3: Estilo de Desenho, Formas e Destaque -->
-      <div class="ribbon-section style-section" aria-label="Estilo de anotações e formas">
+            <div class="ribbon-section style-section" aria-label="Estilo de anotações e formas">
         <label class="color-swatch" title="Cor do Traço / Destaque">
           <span class="color-label">✎</span>
           <input id="styleStrokeColor" type="color" value="#2563eb" aria-label="Cor do traço" />
@@ -288,108 +333,73 @@
           <span id="styleOpacityVal" class="unit">100%</span>
         </div>
       </div>
-    </div>
-
-    <!-- ==================== CORPO PRINCIPAL ==================== -->
-    <div class="workspace-body">
-      <!-- Painel Lateral Esquerdo (Miniaturas / Camadas / Comentários) -->
-      <aside id="leftSidebar" class="sidebar sidebar-left" aria-label="Painel de navegação">
-        <div class="sidebar-tabs" role="tablist">
-          <button class="sidebar-tab active" data-tab="thumbnails" role="tab" aria-selected="true">Miniaturas</button>
-          <button class="sidebar-tab" data-tab="layers" role="tab" aria-selected="false">Objetos</button>
-          <button class="sidebar-tab" data-tab="comments" role="tab" aria-selected="false">Comentários</button>
-        </div>
-
-        <div id="tabThumbnails" class="sidebar-pane active">
-          <div id="thumbnailsList" class="thumbnails-list">
-            <div class="empty-hint">Carregue um PDF para visualizar as miniaturas das páginas.</div>
           </div>
         </div>
 
-        <div id="tabLayers" class="sidebar-pane">
-          <div class="pane-header">
-            <span>Elementos editáveis</span>
-            <span id="layersCountBadge" class="badge">0</span>
-          </div>
-          <div id="layersList" class="layers-list">
-            <div class="empty-hint">Nenhum objeto ou edição nesta página.</div>
-          </div>
-        </div>
-
-        <div id="tabComments" class="sidebar-pane">
-          <div class="pane-header">
-            <span>Anotações e Comentários</span>
-            <span id="commentsCountBadge" class="badge">0</span>
-          </div>
-          <div id="commentsList" class="comments-list">
-            <div class="empty-hint">Use a ferramenta Comentário para adicionar notas ao documento.</div>
-          </div>
-        </div>
-      </aside>
-
-      <!-- Área Central de Visualização e Edição -->
-      <main id="viewport" class="editor-viewport" tabindex="0">
-        <!-- Tela de Boas-vindas (antes de abrir PDF) -->
-        <section id="welcomeScreen" class="welcome-screen">
-          <div class="welcome-card" id="welcomeDropzone">
-            <div class="welcome-icon">
-              <svg viewBox="0 0 64 64">
-                <path d="M16 8h22l14 14v34a4 4 0 0 1-4 4H16a4 4 0 0 1-4-4V12a4 4 0 0 1 4-4z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
-                <polyline points="38 8 38 22 52 22" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
-                <text x="32" y="44" text-anchor="middle" font-size="14" font-weight="700" fill="currentColor" font-family="sans-serif">PDF</text>
-              </svg>
-            </div>
-            <h1>Editor Profissional de PDF</h1>
-            <p class="welcome-subtitle">
-              Edite textos inline, imagens, formulários, anotações e assinaturas preservando 100% da estrutura, tabelas, fontes e layout original do PDF — totalmente no navegador.
-            </p>
-
-            <div class="welcome-actions">
-              <button id="btnWelcomeOpen" class="btn btn-primary btn-lg">
-                <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" fill="none" stroke="currentColor" stroke-width="2"/><polyline points="17 8 12 3 7 8" fill="none" stroke="currentColor" stroke-width="2"/><line x1="12" y1="3" x2="12" y2="15" stroke="currentColor" stroke-width="2"/></svg>
-                <span>Selecionar Arquivo PDF</span>
+        <main id="viewport" class="editor-viewport" tabindex="0">
+          <!-- Tela inicial: escolha a tarefa -->
+          <section id="welcomeScreen" class="welcome-screen">
+            <div class="welcome-card" id="welcomeDropzone">
+              <h1>O que você precisa fazer no PDF?</h1>
+              <div class="routes">
+              <button type="button" class="route" data-intent="signature" data-line="sign">
+                <span class="route-stop"><svg viewBox="0 0 24 24"><path d="M3 17c2-4 4-8 6-8s1 6 3 6 3-5 5-5 2 3 4 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="3" y1="20" x2="21" y2="20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+                <span class="route-text"><strong>Assinar um documento</strong><small>Desenhe, digite ou envie sua assinatura</small></span>
+                <svg class="route-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
               </button>
-              <button id="btnCreateSample" class="btn btn-secondary btn-lg">
-                <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="none" stroke="currentColor" stroke-width="2"/><polyline points="14 2 14 8 20 8" fill="none" stroke="currentColor" stroke-width="2"/><line x1="12" y1="18" x2="12" y2="12" stroke="currentColor" stroke-width="2"/><line x1="9" y1="15" x2="15" y2="15" stroke="currentColor" stroke-width="2"/></svg>
-                <span>Abrir PDF de Demonstração</span>
+              <button type="button" class="route" data-intent="textbox" data-line="mark">
+                <span class="route-stop"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2"/><path d="M8 9h8M12 9v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+                <span class="route-text"><strong>Preencher ou escrever</strong><small>Coloque texto em qualquer lugar da página</small></span>
+                <svg class="route-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
               </button>
-              <button id="btnCreateBlank" class="btn btn-ghost btn-lg">Novo PDF em Branco</button>
+              <button type="button" class="route" data-intent="edit-text" data-line="text">
+                <span class="route-stop"><svg viewBox="0 0 24 24"><path d="M4 7V4h16v3M12 4v16M9 20h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                <span class="route-text"><strong>Corrigir um texto</strong><small>Altere o que já está escrito no PDF</small></span>
+                <svg class="route-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+              </button>
+              </div>
+
+              <div class="welcome-actions">
+                <button id="btnWelcomeOpen" class="btn btn-primary btn-lg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg><span>Abrir um PDF</span></button>
+                <button id="btnCreateSample" class="btn btn-secondary btn-lg"><span>Testar com um exemplo</span></button>
+                <button id="btnCreateBlank" class="btn btn-ghost btn-lg"><span>Começar em branco</span></button>
+              </div>
+
+              <p class="drop-hint">Você também pode arrastar o arquivo para cá.</p>
+              <p class="privacy-note">O arquivo não é enviado a nenhum servidor: a edição acontece no seu navegador.</p>
             </div>
+          </section>
 
-            <p class="drop-hint">Ou arraste e solte qualquer arquivo <strong>.pdf</strong> aqui</p>
-
-            <div class="feature-grid">
-              <div class="feature-chip"><strong>Layout Intacto</strong><span>Camada exata sobre o PDF original</span></div>
-              <div class="feature-chip"><strong>Edição Inline</strong><span>Clique direto em qualquer texto</span></div>
-              <div class="feature-chip"><strong>Formulários & Assinatura</strong><span>AcroForm interativo e assinatura visual</span></div>
-              <div class="feature-chip"><strong>Exportação 3 Modos</strong><span>Original, Editável ou Final</span></div>
-            </div>
-          </div>
-        </section>
-
-        <!-- Container das Páginas Renderizadas -->
-        <div id="pagesContainer" class="pages-container" hidden></div>
-
-        <!-- Overlay Global de Drag & Drop -->
-        <div id="dropOverlay" class="drop-overlay" hidden>
+          <div id="pagesContainer" class="pages-container" hidden></div>
+          <div id="dropOverlay" class="drop-overlay" hidden>
           <div class="drop-overlay-box">
             <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" fill="none" stroke="currentColor" stroke-width="2"/><polyline points="17 8 12 3 7 8" fill="none" stroke="currentColor" stroke-width="2"/><line x1="12" y1="3" x2="12" y2="15" stroke="currentColor" stroke-width="2"/></svg>
             <p>Solte o arquivo PDF para abrir no editor</p>
           </div>
         </div>
-      </main>
+        </main>
 
-      <!-- Painel Lateral Direito (Inspetor de Propriedades) -->
-      <aside id="rightSidebar" class="sidebar sidebar-right" aria-label="Propriedades do elemento">
-        <div class="pane-header">
-          <span>Propriedades</span>
-          <span id="selectedTypeBadge" class="badge muted">Nenhum</span>
+        <!-- Navegação flutuante no celular -->
+        <div id="mobilePager" class="mobile-pager">
+          <button type="button" id="btnMobilePages" class="pager-btn" aria-label="Ver páginas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="12" height="14" rx="2"/><path d="M8 3h10a2 2 0 0 1 2 2v12"/></svg><span id="mobilePageLabel">1 / 1</span></button>
+          <button type="button" id="btnMobileFit" class="pager-btn" aria-label="Ajustar à largura"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/></svg></button>
         </div>
+      </div>
+
+      <!-- Ajustes do elemento selecionado -->
+      <aside id="rightSidebar" class="sidebar sidebar-right" aria-label="Ajustes do elemento">
+        <div class="sheet-grab" aria-hidden="true"></div>
+        <div class="pane-header">
+          <span>Ajustes</span>
+          <span class="pane-header-end"><span id="selectedTypeBadge" class="badge muted">Nenhum</span><button type="button" class="icon-btn sheet-close" aria-label="Fechar painel"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></span>
+        </div>
+
+        <div id="formatHost" class="format-host"></div>
 
         <div id="inspectorEmpty" class="inspector-empty">
           <p>Selecione um texto, imagem, forma, assinatura ou campo de formulário para ajustar suas propriedades precisas.</p>
           <div class="shortcuts-box">
-            <h4>Atalhos Rápidos</h4>
+            <h2>Atalhos rápidos</h2>
             <ul>
               <li><kbd>V</kbd> Selecionar / Mover</li>
               <li><kbd>T</kbd> Editar Texto do PDF</li>
@@ -539,18 +549,95 @@
 
     <!-- ==================== BARRA DE STATUS ==================== -->
     <footer class="status-bar">
-      <div class="status-left">
-        <span id="statusToolBadge" class="status-pill">Ferramenta: Selecionar</span>
-        <span id="statusHint" class="status-hint">Clique em qualquer elemento para selecionar ou mude para "Editar Texto" para editar diretamente o PDF.</span>
-      </div>
-      <div class="status-right">
-        <span id="statusCoords">X: — pt · Y: — pt</span>
-        <span class="status-sep">|</span>
-        <span id="statusPageSize">Página: —</span>
-        <span class="status-sep">|</span>
-        <span id="statusEditCount">0 edições</span>
-      </div>
+      <span id="statusEditCount">0 edições</span>
+      <span id="statusPageSize">Página: —</span>
+      <span id="statusCoords">X: — pt · Y: — pt</span>
     </footer>
+
+    <!-- ==================== BARRAS DO CELULAR ==================== -->
+    <nav id="mobileDock" class="dock" aria-label="Ferramentas principais">
+      <button type="button" class="dock-btn" data-dock="select" data-line="move">
+        <svg viewBox="0 0 24 24"><path d="M5 3l14 9-6.5 1.5L9 20 5 3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+        <span>Mover</span>
+      </button>
+      <button type="button" class="dock-btn" data-dock="edit-text" data-line="text">
+        <svg viewBox="0 0 24 24"><path d="M4 7V4h16v3M12 4v16M9 20h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Corrigir</span>
+      </button>
+      <button type="button" class="dock-btn" data-dock="signature" data-line="sign">
+        <svg viewBox="0 0 24 24"><path d="M3 17c2-4 4-8 6-8s1 6 3 6 3-5 5-5 2 3 4 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="3" y1="20" x2="21" y2="20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <span>Assinar</span>
+      </button>
+      <button type="button" class="dock-btn" data-dock="textbox" data-line="mark">
+        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2"/><path d="M8 9h8M12 9v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <span>Escrever</span>
+      </button>
+      <button type="button" class="dock-btn" data-dock="more" data-line="move">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg>
+        <span>Mais</span>
+      </button>
+    </nav>
+
+    <div id="selectionBar" class="dock selection-bar" role="toolbar" aria-label="Elemento selecionado">
+      <button type="button" class="dock-btn" data-act="edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg><span>Editar</span></button>
+      <button type="button" class="dock-btn" data-act="duplicate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><span>Duplicar</span></button>
+      <button type="button" class="dock-btn" data-act="adjust"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg><span>Ajustar</span></button>
+      <button type="button" class="dock-btn danger" data-act="delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M9 6V4h6v2M6 6l1 14h10l1-14"/></svg><span>Excluir</span></button>
+      <button type="button" class="dock-btn done" data-act="done"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg><span>Pronto</span></button>
+    </div>
+  </div>
+
+  <div id="sheetBackdrop" class="sheet-backdrop"></div>
+
+  <!-- ==================== TODAS AS FERRAMENTAS (CELULAR) ==================== -->
+  <aside id="moreSheet" class="sheet more-sheet" aria-label="Todas as ferramentas">
+    <div class="sheet-grab" aria-hidden="true"></div>
+    <div class="pane-header"><span>Ferramentas</span><button type="button" class="icon-btn sheet-close" aria-label="Fechar painel"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>
+    <div class="more-body">
+      <h3>Marcar</h3>
+      <div class="sheet-grid">
+          <button type="button" class="sheet-tool" data-line="insert" data-pick="highlight"><svg viewBox="0 0 24 24"><path d="M9 11l-6 6v3h9l3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M22 12l-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span>Destacar</span></button>
+          <button type="button" class="sheet-tool" data-line="insert" data-pick="comment"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span>Comentar</span></button>
+          <button type="button" class="sheet-tool" data-line="insert" data-pick="draw"><svg viewBox="0 0 24 24"><path d="M12 20h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span>Desenhar</span></button>
+          <button type="button" class="sheet-tool" data-line="insert" data-pick="image"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="8.5" cy="9.5" r="1.5" fill="currentColor"/><path d="M21 15l-5-5L5 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span>Imagem</span></button>
+      </div>
+      <h3>Formas</h3>
+      <div class="sheet-grid">
+          <button type="button" class="sheet-tool" data-line="insert" data-pick="shape" data-variant="rect"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="16" height="12" rx="1.5"/></svg><span>Retângulo</span></button>
+          <button type="button" class="sheet-tool" data-line="insert" data-pick="shape" data-variant="ellipse"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="12" rx="8.5" ry="6.5"/></svg><span>Elipse</span></button>
+          <button type="button" class="sheet-tool" data-line="insert" data-pick="shape" data-variant="line"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19L19 5"/></svg><span>Linha</span></button>
+          <button type="button" class="sheet-tool" data-line="insert" data-pick="shape" data-variant="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19L19 5M10 5h9v9"/></svg><span>Seta</span></button>
+      </div>
+      <h3>Campos de formulário</h3>
+      <div class="sheet-grid">
+          <button type="button" class="sheet-tool" data-line="mark" data-pick="form" data-variant="text"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 10v4"/></svg><span>Texto</span></button>
+          <button type="button" class="sheet-tool" data-line="mark" data-pick="form" data-variant="checkbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><span>Caixa</span></button>
+          <button type="button" class="sheet-tool" data-line="mark" data-pick="form" data-variant="radio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg><span>Opção</span></button>
+          <button type="button" class="sheet-tool" data-line="mark" data-pick="form" data-variant="dropdown"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M13 11l3 3 3-3"/></svg><span>Lista</span></button>
+          <button type="button" class="sheet-tool" data-line="sign" data-pick="form" data-variant="signature"><svg viewBox="0 0 24 24"><path d="M3 17c2-4 4-8 6-8s1 6 3 6 3-5 5-5 2 3 4 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="3" y1="20" x2="21" y2="20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span>Assinatura</span></button>
+      </div>
+      <h3>Documento</h3>
+      <div class="sheet-grid">
+          <button type="button" class="sheet-tool" data-line="move" data-click="btnOpenPdf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg><span>Abrir PDF</span></button>
+          <button type="button" class="sheet-tool" data-line="move" data-click="btnMobilePages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="12" height="14" rx="2"/><path d="M8 3h10a2 2 0 0 1 2 2v12"/></svg><span>Páginas</span></button>
+          <button type="button" class="sheet-tool" data-line="text" data-click="btnRunOcr"><svg viewBox="0 0 24 24"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="7" y1="12" x2="17" y2="12" stroke="currentColor" stroke-width="1.8"/><line x1="9" y1="9" x2="15" y2="9" stroke="currentColor" stroke-width="1.6"/><line x1="9" y1="15" x2="13" y2="15" stroke="currentColor" stroke-width="1.6"/></svg><span>Ler texto</span></button>
+          <button type="button" class="sheet-tool" data-line="move" data-click="btnToggleTheme"><svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg><span>Tema</span></button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ==================== MODAL: ESCREVER (CELULAR) ==================== -->
+  <div id="textModal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="textModalTitle">
+    <div class="modal-card modal-sm">
+      <div class="modal-header"><h2 id="textModalTitle">Editar texto</h2></div>
+      <div class="modal-body">
+        <textarea id="textModalInput" rows="3" aria-labelledby="textModalTitle"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button id="btnTextCancel" class="btn btn-ghost" type="button">Cancelar</button>
+        <button id="btnTextApply" class="btn btn-primary" type="button">Aplicar</button>
+      </div>
+    </div>
   </div>
 
   <!-- ==================== MODAL: ASSINATURA DIGITAL ==================== -->
@@ -616,7 +703,7 @@
 
       <div class="modal-footer">
         <button class="btn btn-ghost" data-close-modal="signatureModal" type="button">Cancelar</button>
-        <button id="btnSigInsert" class="btn btn-primary" type="button">Inserir Assinatura no PDF</button>
+        <button id="btnSigInsert" class="btn btn-primary" type="button">Colocar na página</button>
       </div>
     </div>
   </div>
@@ -625,13 +712,13 @@
   <div id="exportModal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
     <div class="modal-card modal-md">
       <div class="modal-header">
-        <h2 id="exportModalTitle">Exportar Documento PDF</h2>
+        <h2 id="exportModalTitle">Baixar o PDF</h2>
         <button class="icon-btn modal-close" data-close-modal="exportModal" aria-label="Fechar">&times;</button>
       </div>
 
       <div class="modal-body">
         <label class="prop-field full">
-          <span>Nome do Arquivo</span>
+          <span>Nome do arquivo</span>
           <input id="exportFileName" type="text" value="documento-editado.pdf" />
         </label>
 
@@ -639,34 +726,34 @@
           <label class="export-card selected">
             <input type="radio" name="exportMode" value="preserve" checked />
             <div class="export-card-body">
-              <strong>PDF Preservando Layout Original (Recomendado)</strong>
-              <p>Mantém 100% dos vetores, tabelas, imagens e fontes originais do PDF via <code>pdf-lib</code> e aplica apenas suas edições em coordenadas exatas.</p>
+              <strong>PDF com as suas edições (recomendado)</strong>
+              <p>Mantém o documento original e coloca as alterações por cima, no lugar certo.</p>
             </div>
           </label>
 
           <label class="export-card">
             <input type="radio" name="exportMode" value="editable" />
             <div class="export-card-body">
-              <strong>PDF Editável (AcroForm + Projeto Reeditável)</strong>
-              <p>Mantém campos de formulário interativos preenchíveis e embute os metadados de camadas editáveis para reabrir este PDF e continuar editando depois.</p>
+              <strong>PDF para continuar editando</strong>
+              <p>Os campos continuam preenchíveis e você pode reabrir o arquivo aqui para mudar o que fez. Ele também guarda a versão original.</p>
             </div>
           </label>
 
           <label class="export-card">
             <input type="radio" name="exportMode" value="final" />
             <div class="export-card-body">
-              <strong>PDF Final (Achatado / Fidelidade Visual Máxima)</strong>
-              <p>Achata todos os campos, edições, fontes web, destaques e assinaturas em um documento final pronto para envio ou impressão, impedindo alterações acidentais.</p>
+              <strong>PDF final, pronto para enviar</strong>
+              <p>Junta tudo à página, para que campos e assinaturas não sejam alterados por engano.</p>
             </div>
           </label>
         </div>
 
         <div id="finalQualityWrap" class="prop-group" hidden>
           <label class="prop-field full">
-            <span>Modo de Achatamento do PDF Final</span>
+            <span>Como gerar o PDF final</span>
             <select id="finalFlattenStrategy" class="ctrl-select">
-              <option value="vector-flatten">Vetorial Achatado (texto selecionável, menor arquivo)</option>
-              <option value="high-dpi" selected>Alta Fidelidade Visual 2.5× DPI (aparência 100% idêntica à tela)</option>
+              <option value="vector-flatten">Texto selecionável e arquivo menor</option>
+              <option value="high-dpi" selected>Imagem em alta resolução, igual à tela</option>
             </select>
           </label>
         </div>
@@ -736,7 +823,5 @@
 
   <!-- ==================== NOTIFICAÇÕES TOAST ==================== -->
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
-
-  <script src="script.js"></script>
 </body>
 </html>

@@ -28,17 +28,20 @@
   const OBJECT_TYPES = ['textbox', 'highlight', 'comment', 'draw', 'shape', 'image', 'signature', 'form'];
 
   const TOOL_META = {
-    select:     { label: 'Selecionar',    hint: 'Arraste para mover, use as alças para redimensionar/rotacionar ou clique duplo no texto.' },
-    'edit-text':{ label: 'Editar Texto',  hint: 'Clique diretamente sobre qualquer texto original do PDF para editar inline sem quebrar o layout.' },
-    textbox:    { label: 'Caixa de Texto',hint: 'Clique ou arraste na página para inserir uma nova caixa de texto formatável.' },
-    highlight:  { label: 'Destacar',      hint: 'Arraste sobre qualquer região de texto para aplicar marca-texto translúcido.' },
-    comment:    { label: 'Comentário',    hint: 'Clique na página para fixar um comentário/nota adesiva.' },
-    draw:       { label: 'Desenho Livre', hint: 'Clique e arraste para desenhar à mão livre com curvas suaves.' },
-    shape:      { label: 'Forma',         hint: 'Arraste na página para desenhar a forma geométrica selecionada.' },
-    image:      { label: 'Imagem',        hint: 'Selecione uma imagem para inserir, mover, redimensionar ou rotacionar.' },
-    signature:  { label: 'Assinatura',    hint: 'Crie ou selecione sua assinatura para posicionar no documento.' },
-    form:       { label: 'Formulário',    hint: 'Clique ou arraste na página para criar um campo de formulário interativo (AcroForm).' }
+    select:     { label: 'Mover',          line: 'move',   hint: 'Toque num item para selecionar e arraste para mover.' },
+    'edit-text':{ label: 'Corrigir texto', line: 'text',   hint: 'Toque num texto do documento para reescrever.' },
+    textbox:    { label: 'Escrever',       line: 'mark',   hint: 'Toque ou arraste na página para criar um texto.' },
+    highlight:  { label: 'Destacar',       line: 'insert', hint: 'Arraste sobre o trecho que quer marcar.' },
+    comment:    { label: 'Comentar',       line: 'insert', hint: 'Toque no ponto da página para deixar uma nota.' },
+    draw:       { label: 'Desenhar',       line: 'insert', hint: 'Desenhe direto na página. Dois dedos rolam e ampliam.' },
+    shape:      { label: 'Forma',          line: 'insert', hint: 'Arraste na página para desenhar a forma.' },
+    image:      { label: 'Imagem',         line: 'insert', hint: 'Escolha uma imagem para colocar na página.' },
+    signature:  { label: 'Assinar',        line: 'sign',   hint: 'Crie sua assinatura e arraste até o lugar certo.' },
+    form:       { label: 'Campo',          line: 'mark',   hint: 'Toque ou arraste na página para criar o campo.' }
   };
+
+  // Celular e telas de toque baixas: mesma condição usada na folha de estilos
+  const COMPACT = window.matchMedia('(max-width: 860px), (max-height: 520px) and (pointer: coarse)');
 
   const Utils = {
     uid(prefix = 'el') {
@@ -396,7 +399,10 @@
      */
     async renderPageToCanvas(pageIndex, canvas, zoomScale) {
       const page = await this.pdfDoc.getPage(pageIndex + 1);
-      const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+      // Limita a resolução para não estourar a memória do canvas no celular
+      const base = page.getViewport({ scale: zoomScale });
+      const maxDpr = Math.sqrt(12e6 / (base.width * base.height));
+      const dpr = Math.min(window.devicePixelRatio || 1, COMPACT.matches ? 2 : 2.5, maxDpr);
       const cssViewport = page.getViewport({ scale: zoomScale });
       const renderViewport = page.getViewport({ scale: zoomScale * dpr });
 
@@ -565,6 +571,14 @@
         deleted: false,
         fromOcr: false
       }));
+    }
+
+    /** Libera a memória de uma página que saiu da tela. */
+    releasePage(pageIndex, canvas) {
+      this.renderTasks.get(canvas)?.cancel();
+      this.pageCanvases.delete(pageIndex);
+      canvas.width = 0;
+      canvas.height = 0;
     }
 
     /** Amostra as cores na área que o texto original ocupa na página. */
@@ -858,7 +872,8 @@
         this.ctx.lineCap = 'round';
         this.ctx.lineJoin = 'round';
         this.ctx.strokeStyle = document.getElementById('sigInkColor').value;
-        this.ctx.lineWidth = parseFloat(document.getElementById('sigInkWidth').value) || 2.5;
+        const density = this.canvas.width / (this.canvas.clientWidth || this.canvas.width);
+        this.ctx.lineWidth = (parseFloat(document.getElementById('sigInkWidth').value) || 2.5) * density;
       });
 
       this.canvas.addEventListener('pointermove', (e) => {
@@ -930,11 +945,22 @@
     open(targetFormObjId = null) {
       this.targetFormObjId = targetFormObjId;
       this.modal.hidden = false;
+      this.fitCanvas();
       this.renderSavedList();
     }
 
     close() {
       this.modal.hidden = true;
+    }
+
+    /** Ajusta a área de desenho ao tamanho real na tela, para o traço não distorcer. */
+    fitCanvas() {
+      const w = Math.round(this.canvas.clientWidth * 2);
+      const h = Math.round(this.canvas.clientHeight * 2);
+      if (!w || !h || (this.canvas.width === w && this.canvas.height === h)) return;
+      this.canvas.width = w;
+      this.canvas.height = h;
+      this.hasDrawn = false;
     }
 
     clearCanvas() {
@@ -1961,8 +1987,10 @@
         this.insertImageOrSignature(dataUrl, 'signature');
       });
 
+      this.lastPointerType = 'mouse';
       this.cacheDom();
       this.bindGlobalEvents();
+      this.bindInterfaceEvents();
       this.updateToolUI();
     }
 
@@ -2083,25 +2111,33 @@
 
       this.dom.welcomeScreen.hidden = true;
       this.dom.pagesContainer.hidden = false;
+      this.dom.app.classList.remove('no-doc');
+      this.closeSheets();
+      this.updateToolUI();
 
-      // Calcula zoom inicial confortável ajustado à largura se a tela for menor
-      const availW = this.dom.viewport.clientWidth - 72;
+      // No celular a página ocupa a largura; no computador, 125% quando couber
+      this.fitMode = COMPACT.matches;
+      const availW = this.dom.viewport.clientWidth - 90;
       const firstW = this.state.pages[0]?.width || 595;
-      if (availW > 300 && firstW * 1.25 > availW) {
-        this.state.zoom = Utils.clamp(Utils.round1(availW / firstW), 0.5, 2.0);
+      if (this.fitMode) {
+        this.state.zoom = this.fitZoom();
+      } else if (availW > 300 && firstW * 1.25 > availW) {
+        this.state.zoom = Utils.clamp(Math.floor((availW / firstW) * 100) / 100, 0.5, 2.0);
       } else {
         this.state.zoom = 1.25;
       }
       this.syncZoomSelect();
 
       this.buildPagesDOM();
+      this.dom.viewport.scrollTo(0, 0);
       await this.renderAllPages();
       await this.renderThumbnails();
 
       this.pushHistory();
       this.updateSidebars();
-      this.updateStatusBar();
+      this.syncCurrentPageUI();
       Utils.toast(`"${fileName}" carregado (${numPages} ${numPages === 1 ? 'página' : 'páginas'}).`, 'success');
+      this.applyIntent();
     }
 
     /**
@@ -2184,21 +2220,49 @@
       }
     }
 
-    async renderAllPages() {
-      const gen = ++this.renderGeneration;
-      for (let i = 0; i < this.state.numPages; i++) {
-        if (gen !== this.renderGeneration) return;
+    sizePages() {
+      this.pageElements.forEach((els, i) => {
         const pData = this.state.pages[i];
-        const els = this.pageElements[i];
-        if (!els) continue;
-
         els.pageBox.style.width = `${pData.width * this.state.zoom}px`;
         els.pageBox.style.height = `${pData.height * this.state.zoom}px`;
+      });
+    }
 
-        await this.pdfEngine.renderPageToCanvas(i, els.canvas, this.state.zoom);
-        if (gen !== this.renderGeneration) return;
-        this.renderPageOverlays(i);
-      }
+    /** Desenha só as páginas perto da tela; as outras entram conforme a rolagem. */
+    async renderAllPages() {
+      const gen = ++this.renderGeneration;
+      this.pageObserver?.disconnect();
+      this.renderJobs = new Map();
+      this.sizePages();
+      this.pageElements.forEach((els, i) => this.renderPageOverlays(i));
+
+      this.pageObserver = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          const i = Number(entry.target.dataset.pageIndex);
+          if (entry.isIntersecting) this.renderPageCanvas(i, gen).catch(err => console.warn(err));
+          else this.releasePageCanvas(i);
+        });
+      }, { root: this.dom.viewport, rootMargin: '600px 0px' });
+      this.pageElements.forEach(els => this.pageObserver.observe(els.pageBox));
+
+      await this.renderPageCanvas(this.state.currentPage, gen);
+    }
+
+    renderPageCanvas(i, gen) {
+      const els = this.pageElements[i];
+      if (gen !== this.renderGeneration || !els) return Promise.resolve();
+      if (this.renderJobs.has(i)) return this.renderJobs.get(i);
+      const job = this.pdfEngine.renderPageToCanvas(i, els.canvas, this.state.zoom)
+        .then((viewport) => { if (!viewport && this.renderJobs.get(i) === job) this.renderJobs.delete(i); });
+      this.renderJobs.set(i, job);
+      return job;
+    }
+
+    releasePageCanvas(i) {
+      // A página com seleção fica desenhada: a cor do fundo é lida dela
+      if (!this.renderJobs?.has(i) || this.state.selected?.pageIndex === i || i === this.state.currentPage) return;
+      this.renderJobs.delete(i);
+      this.pdfEngine.releasePage(i, this.pageElements[i].canvas);
     }
 
     async renderThumbnails() {
@@ -2219,12 +2283,23 @@
         label.textContent = `Página ${i + 1}`;
 
         item.append(cWrap, label);
-        item.addEventListener('click', () => this.goToPage(i));
+        item.addEventListener('click', () => { this.closeSheets(); this.goToPage(i); });
         this.dom.thumbnailsList.appendChild(item);
 
-        // Renderiza em segundo plano sem travar a UI
-        this.pdfEngine.renderThumbnail(i, c, 146).catch(() => {});
+        c.width = 146;
+        c.height = Math.round(146 * this.state.pages[i].height / this.state.pages[i].width);
       }
+
+      // Cada miniatura é desenhada quando aparece pela primeira vez
+      this.thumbObserver?.disconnect();
+      this.thumbObserver = new IntersectionObserver((entries, observer) => {
+        entries.filter(e => e.isIntersecting).forEach((e) => {
+          observer.unobserve(e.target);
+          const canvas = e.target.querySelector('canvas');
+          this.pdfEngine.renderThumbnail(Number(e.target.dataset.pageIndex), canvas, 146).catch(() => {});
+        });
+      });
+      this.dom.thumbnailsList.querySelectorAll('.thumb-item').forEach(el => this.thumbObserver.observe(el));
     }
 
     /* ------------------------------------------------------------------------
@@ -2331,6 +2406,16 @@
     bindTextRunEvents(el, run, pageIndex) {
       let editStart = null;
 
+      let wasSelected = false;
+      const sampleOnce = () => {
+        if (run.colorSampled) return;
+        const sampled = this.pdfEngine.sampleColorsForRun(pageIndex, run);
+        run.maskColor = sampled.bgHex;
+        run.color = sampled.fgHex;
+        run.colorSampled = true;
+      };
+      const isSelected = () => this.state.selected?.kind === 'textRun' && this.state.selected.id === run.id;
+
       const startEditing = () => {
         // Amostra cores exatas do canvas na primeira interação
         if (!run.colorSampled) {
@@ -2386,7 +2471,8 @@
           .querySelector(`[data-run-id="${run.id}"]`)?.startEditing();
       };
 
-      el.addEventListener('mousedown', (e) => {
+      el.addEventListener('pointerdown', (e) => {
+        wasSelected = isSelected();
         if (e.button === 2) {
           this.selectElement({ kind: 'textRun', pageIndex, id: run.id });
           return;
@@ -2395,23 +2481,41 @@
           e.stopPropagation();
           return;
         }
+        // No toque, o primeiro contato pode ser rolagem: só arrasta o que já está selecionado
+        if (e.pointerType === 'touch') {
+          if (this.state.tool === 'select' && wasSelected) {
+            e.stopPropagation();
+            this.startDragElement(e, run, 'textRun', pageIndex);
+          }
+          return;
+        }
 
         if (this.state.tool === 'edit-text') {
           activateInlineEdit(e);
         } else if (this.state.tool === 'select') {
           e.stopPropagation();
-          if (!run.colorSampled) {
-            const sampled = this.pdfEngine.sampleColorsForRun(pageIndex, run);
-            run.maskColor = sampled.bgHex;
-            run.color = sampled.fgHex;
-            run.colorSampled = true;
-          }
-          this.selectElement({ kind: 'textRun', pageIndex, id: run.id });
+          sampleOnce();
+          if (!wasSelected) this.selectElement({ kind: 'textRun', pageIndex, id: run.id });
           this.startDragElement(e, run, 'textRun', pageIndex);
         }
       });
 
+      el.addEventListener('click', (e) => {
+        if (this.lastPointerType !== 'touch' || el.contentEditable === 'true') return;
+        if (this.state.tool === 'edit-text') {
+          if (!COMPACT.matches) return activateInlineEdit(e);
+          sampleOnce();
+          this.selectElement({ kind: 'textRun', pageIndex, id: run.id });
+          this.openTextModal();
+        } else if (this.state.tool === 'select') {
+          if (wasSelected) return this.editSelected();
+          sampleOnce();
+          this.selectElement({ kind: 'textRun', pageIndex, id: run.id });
+        }
+      });
+
       el.addEventListener('dblclick', (e) => {
+        if (this.lastPointerType === 'touch') return;
         if (this.state.tool === 'select' || this.state.tool === 'edit-text') {
           activateInlineEdit(e);
         }
@@ -2532,7 +2636,7 @@
         if (obj.open || isSel) {
           const pop = document.createElement('div');
           pop.className = 'comment-popover';
-          pop.addEventListener('mousedown', (e) => e.stopPropagation());
+          pop.addEventListener('pointerdown', (e) => e.stopPropagation());
           const head = document.createElement('div');
           head.className = 'comment-popover-head';
           for (const value of [obj.author || 'Revisor', obj.timestamp || '']) {
@@ -2562,7 +2666,8 @@
           inp.value = obj.value || '';
           inp.placeholder = obj.fieldName || 'Campo de texto';
           inp.style.fontSize = `${Math.max(9, 11 * z)}px`;
-          inp.addEventListener('mousedown', (e) => {
+          inp.readOnly = COMPACT.matches; // no celular o preenchimento abre uma caixa maior
+          inp.addEventListener('pointerdown', (e) => {
             if (isSel) e.stopPropagation();
           });
           inp.addEventListener('input', () => { obj.value = inp.value; this.updateInspector(); });
@@ -2573,7 +2678,7 @@
           cb.type = 'checkbox';
           cb.className = 'form-widget-check';
           cb.checked = !!obj.checked;
-          cb.addEventListener('mousedown', (e) => e.stopPropagation());
+          cb.addEventListener('pointerdown', (e) => e.stopPropagation());
           cb.addEventListener('change', () => {
             obj.checked = cb.checked;
             this.pushHistory();
@@ -2586,7 +2691,7 @@
           rb.className = 'form-widget-radio';
           rb.name = `radio_${pageIndex}_${obj.radioGroup || 'grupo'}`;
           rb.checked = !!obj.checked;
-          rb.addEventListener('mousedown', (e) => e.stopPropagation());
+          rb.addEventListener('pointerdown', (e) => e.stopPropagation());
           rb.addEventListener('change', () => {
             // Desmarca outros radios do mesmo grupo
             this.state.pages[pageIndex].objects.forEach(o => {
@@ -2611,7 +2716,7 @@
             if (opt === obj.value) o.selected = true;
             sel.appendChild(o);
           });
-          sel.addEventListener('mousedown', (e) => { if (isSel) e.stopPropagation(); });
+          sel.addEventListener('pointerdown', (e) => { if (isSel) e.stopPropagation(); });
           sel.addEventListener('change', () => {
             obj.value = sel.value;
             this.pushHistory();
@@ -2638,16 +2743,36 @@
       }
 
       // Eventos de seleção, arrasto e menu de contexto
-      el.addEventListener('mousedown', (e) => {
+      let wasSelected = false;
+      el.addEventListener('pointerdown', (e) => {
+        wasSelected = this.state.selected?.id === obj.id;
         if (e.button === 2) {
           this.selectElement({ kind: 'object', pageIndex, id: obj.id });
           return;
         }
         if (this.state.tool !== 'select') return;
         if (el.classList.contains('editing-text')) return;
+        if (e.pointerType === 'touch') {
+          if (wasSelected) {
+            e.stopPropagation();
+            this.startDragElement(e, obj, 'object', pageIndex);
+          }
+          return;
+        }
         e.stopPropagation();
-        this.selectElement({ kind: 'object', pageIndex, id: obj.id });
+        if (!wasSelected) this.selectElement({ kind: 'object', pageIndex, id: obj.id });
         this.startDragElement(e, obj, 'object', pageIndex);
+      });
+
+      el.addEventListener('click', (e) => {
+        if (this.lastPointerType !== 'touch' || this.state.tool !== 'select') return;
+        if (e.target.matches('input[type="checkbox"], input[type="radio"], select')) return;
+        e.stopPropagation();
+        if (!wasSelected) this.selectElement({ kind: 'object', pageIndex, id: obj.id });
+        const fillsNow = obj.type === 'form' && (
+          (obj.formType === 'text' && COMPACT.matches) ||
+          (obj.formType === 'signature' && !obj.signatureDataUrl));
+        if (wasSelected || fillsNow) this.editSelected();
       });
 
       if (isSel && this.state.tool === 'select') {
@@ -2751,7 +2876,8 @@
       for (const dir of dirs) {
         const h = document.createElement('div');
         h.className = `transform-handle handle-${dir}`;
-        h.addEventListener('mousedown', (e) => {
+        h.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
           e.stopPropagation();
           this.startResizeElement(e, item, kind, pageIndex, dir);
         });
@@ -2762,12 +2888,70 @@
       stem.className = 'rotate-stem';
       const rot = document.createElement('div');
       rot.className = 'handle-rotate';
-      rot.title = 'Arraste para rotacionar (Segure Shift para 15°)';
-      rot.addEventListener('mousedown', (e) => {
+      rot.title = 'Arraste para girar (Shift trava em 15°)';
+      rot.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
         e.stopPropagation();
         this.startRotateElement(e, item, kind, pageIndex, el);
       });
       el.append(stem, rot);
+    }
+
+    /** Acompanha um único dedo ou o mouse até soltar. */
+    trackPointer(e, onMove, onEnd) {
+      const id = e.pointerId;
+      const move = (ev) => { if (ev.pointerId === id) onMove(ev); };
+      const up = (ev) => { if (ev.pointerId === id) finish(false); };
+      const cancel = (ev) => { if (ev.pointerId === id) finish(true); };
+      const finish = (cancelled) => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        window.removeEventListener('pointercancel', cancel);
+        this.cancelGesture = null;
+        onEnd(cancelled);
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', cancel);
+      this.cancelGesture = () => finish(true);
+    }
+
+    /**
+     * Atualiza o elemento durante o gesto sem recriá-lo: recriar derruba o toque
+     * em alguns celulares e deixa o arrasto lento.
+     */
+    previewElement(item, kind, pageIndex) {
+      const els = this.pageElements[pageIndex];
+      const z = this.state.zoom;
+      const node = kind === 'object'
+        ? els.objectsLayer.querySelector(`[data-obj-id="${item.id}"]`)
+        : els.textLayer.querySelector(`[data-run-id="${item.id}"]`);
+      if (!node) return;
+      node.style.left = `${item.x * z}px`;
+      node.style.top = `${item.y * z}px`;
+      node.style.transform = item.rotation ? `rotate(${item.rotation}deg)` : '';
+      if (kind === 'object') {
+        node.style.width = `${item.width * z}px`;
+        node.style.height = `${item.height * z}px`;
+      } else {
+        node.style.minWidth = `${item.width * z}px`;
+        node.style.width = `${item.width * z}px`;
+        node.style.minHeight = `${item.height * z}px`;
+        node.style.color = item.color || '#111111';
+        if (!node.dataset.masked) {
+          node.dataset.masked = '1';
+          els.maskLayer.appendChild(this.createTextMask(item, z));
+        }
+      }
+    }
+
+    /** Encerra um gesto de transformação: grava o histórico e redesenha. */
+    finishTransform(changed, pageIndex) {
+      if (!changed) return;
+      this.pushHistory();
+      this.renderPageOverlays(pageIndex);
+      this.updateInspector();
+      this.updateSidebars();
     }
 
     startDragElement(e, item, kind, pageIndex) {
@@ -2776,31 +2960,20 @@
       const origX = item.x;
       const origY = item.y;
       const z = this.state.zoom;
+      const slack = e.pointerType === 'touch' ? 6 : 2;
       let moved = false;
 
-      const onMove = (ev) => {
+      this.trackPointer(e, (ev) => {
         const dx = (ev.clientX - startX) / z;
         const dy = (ev.clientY - startY) / z;
-        if (!moved && Math.hypot(dx, dy) < 2) return;
+        if (!moved && Math.hypot(dx * z, dy * z) < slack) return;
         moved = true;
         item.x = Utils.round1(origX + dx);
         item.y = Utils.round1(origY + dy);
         if (kind === 'textRun') item.moved = true;
-        this.renderPageOverlays(pageIndex);
+        this.previewElement(item, kind, pageIndex);
         this.updateInspector();
-      };
-
-      const onUp = () => {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-        if (moved) {
-          this.pushHistory();
-          this.updateSidebars();
-        }
-      };
-
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
+      }, () => this.finishTransform(moved, pageIndex));
     }
 
     startResizeElement(e, item, kind, pageIndex, dir) {
@@ -2808,11 +2981,11 @@
       const startY = e.clientY;
       const o = { x: item.x, y: item.y, w: item.width, h: item.height };
       const aspect = item.aspectRatio || (o.w / Math.max(o.h, 1));
-      const lockAspect = (item.type === 'image' || item.type === 'signature') && (item.lockAspect !== false) && !e.shiftKey;
+      const keepsRatio = (item.type === 'image' || item.type === 'signature') && item.lockAspect !== false;
       const z = this.state.zoom;
       let changed = false;
 
-      const onMove = (ev) => {
+      this.trackPointer(e, (ev) => {
         const dx = (ev.clientX - startX) / z;
         const dy = (ev.clientY - startY) / z;
         changed = true;
@@ -2829,7 +3002,7 @@
           ny = o.y + (o.h - nh);
         }
 
-        if (lockAspect && (dir.length === 2)) {
+        if (keepsRatio && !ev.shiftKey && dir.length === 2) {
           nh = Math.max(8, nw / aspect);
           if (dir.includes('n')) ny = o.y + (o.h - nh);
         }
@@ -2840,21 +3013,9 @@
         item.height = Utils.round1(nh);
         if (kind === 'textRun') item.moved = true;
 
-        this.renderPageOverlays(pageIndex);
+        this.previewElement(item, kind, pageIndex);
         this.updateInspector();
-      };
-
-      const onUp = () => {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-        if (changed) {
-          this.pushHistory();
-          this.updateSidebars();
-        }
-      };
-
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
+      }, () => this.finishTransform(changed, pageIndex));
     }
 
     startRotateElement(e, item, kind, pageIndex, el) {
@@ -2863,96 +3024,100 @@
       const cy = rect.top + rect.height / 2;
       let changed = false;
 
-      const onMove = (ev) => {
+      this.trackPointer(e, (ev) => {
         changed = true;
         let angle = Math.atan2(ev.clientY - cy, ev.clientX - cx) * (180 / Math.PI) + 90;
         if (ev.shiftKey) angle = Math.round(angle / 15) * 15;
         else angle = Math.round(angle);
         if (angle > 180) angle -= 360;
         if (angle < -180) angle += 360;
+        // com o dedo é difícil acertar o ângulo reto: encaixa quando chega perto
+        if (ev.pointerType === 'touch' && Math.abs(angle - Utils.snapRightAngle(angle)) <= 4) angle = Utils.snapRightAngle(angle);
         item.rotation = item.type === 'form' ? Utils.snapRightAngle(angle) : angle;
         if (kind === 'textRun') item.moved = true;
-        this.renderPageOverlays(pageIndex);
+        this.previewElement(item, kind, pageIndex);
         this.updateInspector();
-      };
-
-      const onUp = () => {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-        if (changed) this.pushHistory();
-      };
-
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
+      }, () => this.finishTransform(changed, pageIndex));
     }
 
     /* ------------------------------------------------------------------------
        INTERAÇÕES NA PÁGINA (CRIAÇÃO DE ANOTAÇÕES, FORMAS, DESENHO, FORMULÁRIOS)
        ------------------------------------------------------------------------ */
     bindPageInteractionEvents(pageBox, pageIndex) {
-      pageBox.addEventListener('mousemove', (e) => {
+      const pointOf = (e) => {
         const rect = pageBox.getBoundingClientRect();
-        const px = Utils.round1((e.clientX - rect.left) / this.state.zoom);
-        const py = Utils.round1((e.clientY - rect.top) / this.state.zoom);
-        this.dom.statusCoords.textContent = `X: ${px} pt · Y: ${py} pt`;
+        return {
+          x: (e.clientX - rect.left) / this.state.zoom,
+          y: (e.clientY - rect.top) / this.state.zoom
+        };
+      };
+      const isBlank = (target) => target === pageBox ||
+        target.classList.contains('text-overlay-layer') || target.classList.contains('objects-layer');
+
+      pageBox.addEventListener('pointermove', (e) => {
+        const p = pointOf(e);
+        this.dom.statusCoords.textContent = `X: ${Utils.round1(p.x)} pt · Y: ${Utils.round1(p.y)} pt`;
       });
 
       pageBox.addEventListener('contextmenu', (e) => {
         e.preventDefault();
-        this.openContextMenu(e.clientX, e.clientY);
+        if (this.lastPointerType !== 'touch') this.openContextMenu(e.clientX, e.clientY);
       });
 
-      pageBox.addEventListener('mousedown', (e) => {
-        if (e.button !== 0) return;
+      pageBox.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || !e.isPrimary) return;
         this.closeContextMenu();
         this.state.currentPage = pageIndex;
         this.syncCurrentPageUI();
 
-        const rect = pageBox.getBoundingClientRect();
-        const startPtX = (e.clientX - rect.left) / this.state.zoom;
-        const startPtY = (e.clientY - rect.top) / this.state.zoom;
-
+        const start = pointOf(e);
         if (this.state.tool === 'select') {
-          if (e.target === pageBox || e.target.classList.contains('text-overlay-layer') || e.target.classList.contains('objects-layer')) {
-            this.selectElement(null);
-          }
-          return;
-        }
-
-        if (this.state.tool === 'comment') {
-          const obj = {
-            id: Utils.uid('cmt'),
-            type: 'comment',
-            pageIndex,
-            x: Utils.round1(startPtX - 13),
-            y: Utils.round1(startPtY - 13),
-            width: 26,
-            height: 26,
-            rotation: 0,
-            opacity: 1,
-            zIndex: ++this.state.zCounter,
-            author: 'Revisor',
-            text: '',
-            timestamp: Utils.formatTimestamp(),
-            open: true
-          };
-          this.state.pages[pageIndex].objects.push(obj);
-          this.pushHistory();
-          this.setTool('select');
-          this.selectElement({ kind: 'object', pageIndex, id: obj.id });
-          this.renderPageOverlays(pageIndex);
-          this.updateSidebars();
+          if (e.pointerType !== 'touch' && isBlank(e.target)) this.selectElement(null);
           return;
         }
 
         if (this.state.tool === 'draw') {
-          this.handleFreehandDraw(e, pageBox, pageIndex, startPtX, startPtY);
+          e.preventDefault();
+          this.handleFreehandDraw(e, pageBox, pageIndex, start.x, start.y);
           return;
         }
 
         if (['textbox', 'highlight', 'shape', 'form'].includes(this.state.tool)) {
-          this.handleBoxCreation(e, pageBox, pageIndex, startPtX, startPtY);
+          e.preventDefault();
+          this.handleBoxCreation(e, pageBox, pageIndex, start.x, start.y);
         }
+      });
+
+      pageBox.addEventListener('click', (e) => {
+        if (this.state.tool === 'select') {
+          if (this.lastPointerType === 'touch' && isBlank(e.target)) this.selectElement(null);
+          return;
+        }
+        if (this.state.tool !== 'comment') return;
+        const p = pointOf(e);
+        const obj = {
+          id: Utils.uid('cmt'),
+          type: 'comment',
+          pageIndex,
+          x: Utils.round1(p.x - 13),
+          y: Utils.round1(p.y - 13),
+          width: 26,
+          height: 26,
+          rotation: 0,
+          opacity: 1,
+          zIndex: ++this.state.zCounter,
+          author: 'Revisor',
+          text: '',
+          timestamp: Utils.formatTimestamp(),
+          open: true
+        };
+        this.state.pages[pageIndex].objects.push(obj);
+        this.pushHistory();
+        this.setTool('select');
+        this.selectElement({ kind: 'object', pageIndex, id: obj.id });
+        this.renderPageOverlays(pageIndex);
+        this.updateSidebars();
+        if (COMPACT.matches) this.openTextModal();
       });
     }
 
@@ -2989,12 +3154,10 @@
         }
       };
 
-      const onUp = () => {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
+      const onUp = (cancelled) => {
         path.remove();
 
-        if (rawPoints.length < 2) return;
+        if (cancelled || rawPoints.length < 2) return;
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         rawPoints.forEach(p => {
           if (p.x < minX) minX = p.x;
@@ -3030,8 +3193,7 @@
         this.updateSidebars();
       };
 
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
+      this.trackPointer(e, onMove, onUp);
     }
 
     handleBoxCreation(e, pageBox, pageIndex, startPtX, startPtY) {
@@ -3060,10 +3222,9 @@
         preview.style.height = `${h * z}px`;
       };
 
-      const onUp = () => {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
+      const onUp = (cancelled) => {
         preview.remove();
+        if (cancelled) return;
 
         const x = Utils.round1(Math.min(startPtX, curX));
         const y = Utils.round1(Math.min(startPtY, curY));
@@ -3168,7 +3329,9 @@
         this.updateSidebars();
 
         // Se acabou de criar uma caixa de texto, já abre em edição direta
-        if (obj.type === 'textbox') {
+        if (obj.type === 'textbox' && COMPACT.matches) {
+          this.openTextModal({ isNew: true });
+        } else if (obj.type === 'textbox') {
           const el = this.pageElements[pageIndex].objectsLayer.querySelector(`[data-obj-id="${obj.id}"]`);
           const inner = el?.querySelector('.obj-textbox-content');
           if (inner) {
@@ -3180,8 +3343,7 @@
         }
       };
 
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
+      this.trackPointer(e, onMove, onUp);
     }
 
     insertImageOrSignature(dataUrl, type = 'image') {
@@ -3200,12 +3362,18 @@
         const w = Utils.round1(Math.min(maxW, natW));
         const h = Utils.round1(w / ratio);
 
+        // Coloca no meio da parte da página que está na tela
+        const box = this.pageElements[pageIndex].pageBox.getBoundingClientRect();
+        const view = this.dom.viewport.getBoundingClientRect();
+        const middle = (view.top + view.height / 2 - box.top) / this.state.zoom;
+        const centerY = Utils.clamp(middle, h / 2, Math.max(h / 2, pData.height - h / 2));
+
         const obj = {
           id: Utils.uid(type === 'signature' ? 'sig' : 'img'),
           type,
           pageIndex,
           x: Utils.round1((pData.width - w) / 2),
-          y: Utils.round1((pData.height - h) / 2),
+          y: Utils.round1(centerY - h / 2),
           width: w,
           height: h,
           rotation: 0,
@@ -3337,6 +3505,11 @@
     }
 
     updateInspector() {
+      this.fillInspector();
+      this.refreshChrome();
+    }
+
+    fillInspector() {
       const info = this.getSelectedItem();
       if (!info) {
         this.dom.inspectorEmpty.hidden = false;
@@ -3465,6 +3638,7 @@
         row.querySelector('.layer-row-title').textContent = String(entry.title).slice(0, 42);
         row.querySelector('.layer-row-meta').textContent = entry.meta;
         row.addEventListener('click', () => {
+          this.closeSheets();
           this.setTool('select');
           this.selectElement({ kind: entry.kind, pageIndex: this.state.currentPage, id: entry.item.id });
         });
@@ -3501,6 +3675,7 @@
         row.querySelector('.comment-row-head span').textContent = obj.timestamp || '';
         row.querySelector('.comment-row-body').textContent = obj.text || '(Sem texto — clique para editar)';
         row.addEventListener('click', () => {
+          this.closeSheets();
           this.goToPage(pageIndex);
           obj.open = true;
           this.setTool('select');
@@ -3759,8 +3934,9 @@
       app.classList.add(`tool-${this.state.tool}`);
 
       const meta = TOOL_META[this.state.tool] || TOOL_META.select;
-      this.dom.statusToolBadge.textContent = `Ferramenta: ${meta.label}`;
-      this.dom.statusHint.textContent = meta.hint;
+      this.dom.statusToolBadge.textContent = meta.label;
+      this.dom.statusHint.textContent = this.state.numPages ? meta.hint : 'Abra um PDF para começar.';
+      this.refreshChrome();
 
       // Atualiza overlays na página atual para mostrar/ocultar alças conforme ferramenta
       if (this.state.selected) {
@@ -3780,6 +3956,7 @@
 
     syncCurrentPageUI() {
       this.dom.pageNumberInput.value = String(this.state.currentPage + 1);
+      document.getElementById('mobilePageLabel').textContent = `${this.state.currentPage + 1} / ${this.state.numPages}`;
       document.getElementById('btnPrevPage').disabled = this.state.currentPage <= 0;
       document.getElementById('btnNextPage').disabled = this.state.currentPage >= this.state.numPages - 1;
       this.dom.thumbnailsList.querySelectorAll('.thumb-item').forEach((el, i) => {
@@ -3788,10 +3965,30 @@
       this.updateStatusBar();
     }
 
-    async setZoom(newZoom) {
+    fitZoom() {
+      const page = this.state.pages[this.state.currentPage] || { width: 595 };
+      const width = this.dom.viewport.clientWidth - 24;
+      return Utils.clamp(Math.floor((width / page.width) * 100) / 100, 0.25, 2);
+    }
+
+    /** `anchor` é o ponto da área de visão que deve continuar parado durante o zoom. */
+    async setZoom(newZoom, anchor) {
       if (!this.state.numPages) return;
-      this.state.zoom = Utils.clamp(Math.round(newZoom * 100) / 100, 0.35, 3.5);
+      const view = this.dom.viewport.getBoundingClientRect();
+      const ax = view.left + (anchor ? anchor.x : view.width / 2);
+      const ay = view.top + (anchor ? anchor.y : view.height / 2);
+      const boxes = this.pageElements.map(els => els.pageBox);
+      const held = boxes.find(b => b.getBoundingClientRect().bottom >= ay) || boxes[boxes.length - 1];
+      const before = held.getBoundingClientRect();
+      const fx = (ax - before.left) / before.width;
+      const fy = (ay - before.top) / before.height;
+
+      this.state.zoom = Utils.clamp(Math.round(newZoom * 100) / 100, 0.25, 3.5);
       this.syncZoomSelect();
+      this.sizePages();
+      const after = held.getBoundingClientRect();
+      this.dom.viewport.scrollLeft += after.left + fx * after.width - ax;
+      this.dom.viewport.scrollTop += after.top + fy * after.height - ay;
       await this.renderAllPages();
     }
 
@@ -3957,19 +4154,28 @@
        ------------------------------------------------------------------------ */
     bindGlobalEvents() {
       // Abrir PDF / Exemplo / Branco
-      document.getElementById('btnOpenPdf').addEventListener('click', () => this.dom.pdfFileInput.click());
-      document.getElementById('btnWelcomeOpen').addEventListener('click', () => this.dom.pdfFileInput.click());
+      const chooseFile = (intent = null) => {
+        this.pendingIntent = intent;
+        this.dom.pdfFileInput.click();
+      };
+      document.getElementById('btnOpenPdf').addEventListener('click', () => chooseFile());
+      document.getElementById('btnWelcomeOpen').addEventListener('click', () => chooseFile());
+      document.querySelectorAll('.route').forEach(route => {
+        route.addEventListener('click', () => chooseFile(route.dataset.intent));
+      });
       this.dom.pdfFileInput.addEventListener('change', (e) => {
         if (e.target.files[0]) this.openPdfFile(e.target.files[0]);
         e.target.value = '';
       });
 
       document.getElementById('btnCreateSample').addEventListener('click', async () => {
+        this.pendingIntent = null;
         const bytes = await SamplePDFGenerator.createDemoPdf();
         await this.loadPdfBytes(bytes, 'Relatorio-Demonstracao.pdf');
       });
 
       document.getElementById('btnCreateBlank').addEventListener('click', async () => {
+        this.pendingIntent = null;
         const bytes = await SamplePDFGenerator.createBlankPdf();
         await this.loadPdfBytes(bytes, 'Novo-Documento.pdf');
       });
@@ -4008,8 +4214,10 @@
         this.dom.rightSidebar.classList.toggle('collapsed');
       });
       document.getElementById('btnToggleTheme').addEventListener('click', () => {
-        const html = document.documentElement;
-        html.dataset.theme = html.dataset.theme === 'dark' ? 'light' : 'dark';
+        const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+        document.documentElement.dataset.theme = next;
+        document.querySelector('meta[name="theme-color"]').content = next === 'dark' ? '#0a1729' : '#10233d';
+        try { localStorage.setItem('pdf-studio-theme', next); } catch { /* sem armazenamento */ }
       });
 
       // Abas do painel lateral esquerdo
@@ -4060,12 +4268,13 @@
       });
 
       // Zoom
-      document.getElementById('btnZoomOut').addEventListener('click', () => this.setZoom(this.state.zoom - 0.15));
-      document.getElementById('btnZoomIn').addEventListener('click', () => this.setZoom(this.state.zoom + 0.15));
+      document.getElementById('btnZoomOut').addEventListener('click', () => { this.fitMode = false; this.setZoom(this.state.zoom - 0.15); });
+      document.getElementById('btnZoomIn').addEventListener('click', () => { this.fitMode = false; this.setZoom(this.state.zoom + 0.15); });
       this.dom.zoomSelect.addEventListener('change', () => {
         const v = this.dom.zoomSelect.value;
         const p = this.state.pages[this.state.currentPage];
         if (!p) return;
+        this.fitMode = v === 'fit-width';
         if (v === 'fit-width') {
           this.setZoom((this.dom.viewport.clientWidth - 76) / p.width);
         } else if (v === 'fit-page') {
@@ -4093,8 +4302,8 @@
 
       const positionDropdown = (btn, menu) => {
         const r = btn.getBoundingClientRect();
-        menu.style.left = `${Math.min(r.left, window.innerWidth - 210)}px`;
-        menu.style.top = `${r.bottom + 4}px`;
+        menu.style.left = `${Math.min(r.right + 8, window.innerWidth - 232)}px`;
+        menu.style.top = `${Math.max(8, Math.min(r.top, window.innerHeight - menu.offsetHeight - 8))}px`;
       };
 
       document.querySelectorAll('.tool-btn').forEach(btn => {
@@ -4321,14 +4530,7 @@
           const act = btn.dataset.ctx;
           this.closeContextMenu();
           if (act === 'edit') {
-            const info = this.getSelectedItem();
-            if (info?.kind === 'textRun') {
-              const el = this.pageElements[info.pageIndex].textLayer.querySelector(`[data-run-id="${info.item.id}"]`);
-              el?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-            } else if (info?.item?.type === 'textbox') {
-              const el = this.pageElements[info.pageIndex].objectsLayer.querySelector(`[data-obj-id="${info.item.id}"] .obj-textbox-content`);
-              el?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-            }
+            this.editSelected();
           } else if (act === 'copy') this.copySelected();
           else if (act === 'cut') this.cutSelected();
           else if (act === 'paste') this.pasteClipboard();
@@ -4371,6 +4573,8 @@
 
         if (e.key === 'Escape') {
           this.closeContextMenu();
+          this.closeSheets();
+          if (this.textEdit) this.closeTextModal(false);
           ['signatureModal', 'exportModal', 'ocrModal'].forEach(id => {
             document.getElementById(id).hidden = true;
           });
@@ -4482,6 +4686,329 @@
       });
     }
   }
+
+  /* ==========================================================================
+     9. INTERFACE: FOLHAS, BARRAS DO CELULAR E GESTOS
+     ========================================================================== */
+  Object.assign(PDFEditorApp.prototype, {
+    /** Cor da linha, opções visíveis e barra de seleção conforme ferramenta e item. */
+    refreshChrome() {
+      const app = this.dom.app;
+      const info = this.getSelectedItem();
+      const tool = this.state.tool;
+      const type = info ? (info.kind === 'textRun' ? 'textRun' : info.item.type) : null;
+      const lines = {
+        textRun: 'text', textbox: 'mark', form: 'mark', signature: 'sign',
+        highlight: 'insert', comment: 'insert', draw: 'insert', shape: 'insert', image: 'insert'
+      };
+      const picked = Boolean(info) && tool === 'select';
+
+      let ctx = 'none';
+      // com a ferramenta Mover valem as opções do item; nas outras, as da ferramenta
+      const target = tool === 'select' ? type : tool;
+      if (['textRun', 'textbox', 'edit-text'].includes(target)) ctx = 'text';
+      else if (['shape', 'draw', 'highlight'].includes(target)) ctx = 'style';
+
+      app.dataset.ctx = ctx;
+      app.dataset.line = picked ? lines[type] : (TOOL_META[tool] || TOOL_META.select).line;
+      app.classList.toggle('has-selection', picked);
+
+      const inDock = ['select', 'edit-text', 'signature', 'textbox'];
+      document.querySelectorAll('.dock-btn[data-dock]').forEach(btn => {
+        const on = btn.dataset.dock === tool || (btn.dataset.dock === 'more' && !inDock.includes(tool));
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', String(on));
+        if (btn.dataset.dock === 'more') btn.dataset.line = on ? TOOL_META[tool].line : 'move';
+      });
+
+      const edit = document.querySelector('[data-act="edit"]');
+      edit.disabled = !['textRun', 'textbox', 'comment', 'form'].includes(type);
+    },
+
+    openSheet(id) {
+      this.closeSheets();
+      const sheet = document.getElementById(id);
+      sheet.classList.remove('collapsed');
+      sheet.classList.add('open');
+      document.getElementById('sheetBackdrop').classList.add('open');
+      sheet.querySelector('.sheet-close')?.focus({ preventScroll: true });
+    },
+
+    closeSheets() {
+      document.querySelectorAll('.sidebar.open, .sheet.open').forEach(s => {
+        s.classList.remove('open');
+        s.style.transform = '';
+      });
+      document.getElementById('sheetBackdrop').classList.remove('open');
+    },
+
+    /** No celular os controles de formatação vão para a folha de ajustes. */
+    placeFormatControls() {
+      const sections = [document.querySelector('.format-section'), document.querySelector('.style-section')];
+      const options = document.getElementById('contextOptions');
+      if (COMPACT.matches) document.getElementById('formatHost').append(...sections);
+      else options.prepend(...sections);
+    },
+
+    applyIntent() {
+      const intent = this.pendingIntent;
+      this.pendingIntent = null;
+      if (!intent) return;
+      if (intent === 'signature') this.signatureManager.open();
+      else this.setTool(intent);
+    },
+
+    /** Abre a edição do item selecionado da forma que cabe na tela. */
+    editSelected() {
+      const info = this.getSelectedItem();
+      if (!info) return;
+      const { item, kind, pageIndex } = info;
+      if (item.type === 'form' && item.formType === 'signature') {
+        this.signatureManager.open(item.id);
+      } else if (item.type === 'form' && ['checkbox', 'radio'].includes(item.formType)) {
+        if (item.formType === 'radio') {
+          this.state.pages[pageIndex].objects
+            .filter(o => o.formType === 'radio' && o.radioGroup === item.radioGroup)
+            .forEach(o => { o.checked = false; });
+        }
+        item.checked = item.formType === 'radio' ? true : !item.checked;
+        this.pushHistory();
+        this.renderPageOverlays(pageIndex);
+        this.updateInspector();
+      } else if (item.type === 'form' && item.formType === 'dropdown') {
+        this.openSheet('rightSidebar');
+      } else if (COMPACT.matches) {
+        this.openTextModal();
+      } else if (kind === 'textRun') {
+        this.pageElements[pageIndex].textLayer.querySelector(`[data-run-id="${item.id}"]`)?.startEditing();
+      } else if (item.type === 'textbox') {
+        this.pageElements[pageIndex].objectsLayer
+          .querySelector(`[data-obj-id="${item.id}"] .obj-textbox-content`)
+          ?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      }
+    },
+
+    /** Caixa grande para escrever no celular, com a página atualizando junto. */
+    openTextModal({ isNew = false } = {}) {
+      const info = this.getSelectedItem();
+      if (!info) return;
+      const { item, kind, pageIndex } = info;
+      let field = 'text';
+      let title = kind === 'textRun' ? 'Corrigir texto' : 'Escrever';
+      if (item.type === 'comment') title = 'Comentário';
+      if (item.type === 'form') {
+        if (item.formType !== 'text') return;
+        field = 'value';
+        title = 'Preencher campo';
+      } else if (kind === 'object' && !['textbox', 'comment'].includes(item.type)) {
+        return;
+      }
+
+      this.textEdit = { item, kind, pageIndex, field, isNew, before: { ...item } };
+      const input = document.getElementById('textModalInput');
+      document.getElementById('textModalTitle').textContent = title;
+      input.value = isNew ? '' : (item[field] || '');
+      input.placeholder = 'Digite aqui';
+      document.getElementById('textModal').hidden = false;
+      input.focus();
+    },
+
+    previewText(value) {
+      const edit = this.textEdit;
+      if (!edit) return;
+      const { item, kind, pageIndex, field, before } = edit;
+      item[field] = value;
+      if (kind === 'textRun') item.edited = before.edited || value !== before.text;
+      this.renderPageOverlays(pageIndex);
+      if (item.type === 'textbox') {
+        const inner = this.pageElements[pageIndex].objectsLayer
+          .querySelector(`[data-obj-id="${item.id}"] .obj-textbox-content`);
+        const needed = inner ? Utils.round1(inner.scrollHeight / this.state.zoom) : 0;
+        if (needed > item.height) {
+          item.height = needed;
+          this.renderPageOverlays(pageIndex);
+        }
+      }
+    },
+
+    closeTextModal(apply) {
+      const edit = this.textEdit;
+      if (!edit) return;
+      this.textEdit = null;
+      document.getElementById('textModal').hidden = true;
+      const { item, pageIndex, isNew, before } = edit;
+      const empty = isNew && !String(document.getElementById('textModalInput').value).trim();
+
+      if (isNew && (!apply || empty)) {
+        const page = this.state.pages[pageIndex];
+        page.objects = page.objects.filter(o => o.id !== item.id);
+        this.state.selected = null;
+      } else if (!apply) {
+        Object.assign(item, before);
+      }
+      this.pushHistory();
+      this.renderPageOverlays(pageIndex);
+      this.updateInspector();
+      this.updateSidebars();
+    },
+
+    bindInterfaceEvents() {
+      this.dom.app = document.getElementById('app');
+      window.addEventListener('pointerdown', (e) => { this.lastPointerType = e.pointerType || 'mouse'; }, true);
+
+      this.placeFormatControls();
+      // Em telas estreitas de computador, as miniaturas começam recolhidas
+      if (window.innerWidth <= 1100) this.dom.leftSidebar.classList.add('collapsed');
+      COMPACT.addEventListener('change', () => {
+        this.closeSheets();
+        this.placeFormatControls();
+        if (COMPACT.matches && this.state.numPages) {
+          this.fitMode = true;
+          this.setZoom(this.fitZoom());
+        }
+      });
+
+      document.getElementById('sheetBackdrop').addEventListener('click', () => this.closeSheets());
+      document.querySelectorAll('.sheet-close').forEach(b => b.addEventListener('click', () => this.closeSheets()));
+      document.getElementById('btnMobilePages').addEventListener('click', () => this.openSheet('leftSidebar'));
+      document.getElementById('btnMobileFit').addEventListener('click', () => {
+        this.fitMode = true;
+        this.setZoom(this.fitZoom());
+      });
+
+      document.querySelectorAll('.dock-btn[data-dock]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const tool = btn.dataset.dock;
+          if (tool === 'more') return this.openSheet('moreSheet');
+          if (tool === 'signature') return this.signatureManager.open();
+          this.setTool(tool !== 'select' && this.state.tool === tool ? 'select' : tool);
+          if (tool !== 'select') this.selectElement(null);
+        });
+      });
+
+      document.querySelectorAll('.sheet-tool').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const { pick, variant, click } = btn.dataset;
+          this.closeSheets();
+          if (click) return document.getElementById(click).click();
+          if (!this.state.numPages) return Utils.toast('Abra um PDF primeiro.', 'warning');
+          if (pick === 'image') return this.dom.imageFileInput.click();
+          if (pick === 'shape') this.state.shapeType = variant;
+          if (pick === 'form') this.state.formType = variant;
+          this.selectElement(null);
+          this.setTool(pick);
+        });
+      });
+
+      const actions = {
+        edit: () => this.editSelected(),
+        duplicate: () => this.duplicateSelected(),
+        adjust: () => this.openSheet('rightSidebar'),
+        delete: () => this.deleteSelected(),
+        done: () => this.selectElement(null)
+      };
+      document.querySelectorAll('[data-act]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          actions[btn.dataset.act]();
+        });
+      });
+
+      const input = document.getElementById('textModalInput');
+      input.addEventListener('input', () => this.previewText(input.value));
+      document.getElementById('btnTextApply').addEventListener('click', () => this.closeTextModal(true));
+      document.getElementById('btnTextCancel').addEventListener('click', () => this.closeTextModal(false));
+
+      this.bindSheetSwipe();
+      this.bindPinchZoom();
+
+      // Girar o aparelho reajusta a página; abrir o teclado (só altura) não
+      let lastWidth = window.innerWidth;
+      let timer;
+      window.addEventListener('resize', () => {
+        if (window.innerWidth === lastWidth) return;
+        lastWidth = window.innerWidth;
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          if (this.fitMode && this.state.numPages) this.setZoom(this.fitZoom());
+        }, 180);
+      });
+    },
+
+    /** Puxar a alça para baixo fecha a folha. */
+    bindSheetSwipe() {
+      document.querySelectorAll('.sheet-grab').forEach(grab => {
+        grab.addEventListener('pointerdown', (e) => {
+          const sheet = grab.parentElement;
+          const startY = e.clientY;
+          const startedAt = performance.now();
+          let dy = 0;
+          sheet.style.transition = 'none';
+          this.trackPointer(e, (ev) => {
+            dy = Math.max(0, ev.clientY - startY);
+            sheet.style.transform = `translateY(${dy}px)`;
+          }, (cancelled) => {
+            sheet.style.transition = '';
+            sheet.style.transform = '';
+            const speed = dy / Math.max(1, performance.now() - startedAt);
+            if (!cancelled && (dy > 110 || (dy > 20 && speed > 0.45))) this.closeSheets();
+          });
+        });
+      });
+    },
+
+    /** Dois dedos: amplia e desloca a página. */
+    bindPinchZoom() {
+      const view = this.dom.viewport;
+      const pages = this.dom.pagesContainer;
+      let pinch = null;
+      const read = (touches) => {
+        const rect = view.getBoundingClientRect();
+        const [a, b] = touches;
+        return {
+          d: Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY),
+          x: (a.clientX + b.clientX) / 2 - rect.left,
+          y: (a.clientY + b.clientY) / 2 - rect.top
+        };
+      };
+
+      view.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 2 || !this.state.numPages) return;
+        this.cancelGesture?.();
+        const start = read(e.touches);
+        pinch = { start, now: start, scale: 1 };
+        pages.style.transformOrigin = `${start.x + view.scrollLeft}px ${start.y + view.scrollTop}px`;
+      }, { passive: true });
+
+      view.addEventListener('touchmove', (e) => {
+        if (!pinch || e.touches.length !== 2) return;
+        e.preventDefault();
+        pinch.now = read(e.touches);
+        const z = this.state.zoom;
+        pinch.scale = Utils.clamp(pinch.now.d / pinch.start.d, 0.25 / z, 3.5 / z);
+        pages.style.transform = `translate(${pinch.now.x - pinch.start.x}px, ${pinch.now.y - pinch.start.y}px) scale(${pinch.scale})`;
+      }, { passive: false });
+
+      const end = async (e) => {
+        if (!pinch || e.touches.length >= 2) return;
+        const { start, now, scale } = pinch;
+        pinch = null;
+        pages.style.transform = '';
+        if (Math.abs(scale - 1) > 0.03) {
+          this.fitMode = false;
+          const done = this.setZoom(this.state.zoom * scale, start);
+          view.scrollBy(start.x - now.x, start.y - now.y);
+          await done;
+        } else {
+          view.scrollBy(start.x - now.x, start.y - now.y);
+        }
+      };
+      view.addEventListener('touchend', end);
+      view.addEventListener('touchcancel', end);
+    }
+  });
 
   // Inicialização segura quando o DOM estiver pronto
   window.addEventListener('DOMContentLoaded', () => {
