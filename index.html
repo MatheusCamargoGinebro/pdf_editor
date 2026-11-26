@@ -8,7 +8,6 @@
 
   <!-- PDF.js 3.11.174 (UMD: compatível com file:// e servidores HTTP) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
 
   <!-- pdf-lib 1.17.1 para manipulação vetorial e exportação fiel de PDF -->
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
@@ -179,7 +178,7 @@
           <span>Imagem</span>
         </button>
 
-        <button class="tool-btn" id="btnOpenSignature" data-tool="signature" title="Assinatura Digital">
+        <button class="tool-btn" id="btnOpenSignature" data-tool="signature" title="Assinatura">
           <svg viewBox="0 0 24 24"><path d="M3 17c2-4 4-8 6-8s1 6 3 6 3-5 5-5 2 3 4 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="3" y1="20" x2="21" y2="20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           <span>Assinatura</span>
         </button>
@@ -362,7 +361,7 @@
             <div class="feature-grid">
               <div class="feature-chip"><strong>Layout Intacto</strong><span>Camada exata sobre o PDF original</span></div>
               <div class="feature-chip"><strong>Edição Inline</strong><span>Clique direto em qualquer texto</span></div>
-              <div class="feature-chip"><strong>Formulários & Assinatura</strong><span>AcroForm interativo e assinatura digital</span></div>
+              <div class="feature-chip"><strong>Formulários & Assinatura</strong><span>AcroForm interativo e assinatura visual</span></div>
               <div class="feature-chip"><strong>Exportação 3 Modos</strong><span>Original, Editável ou Final</span></div>
             </div>
           </div>
@@ -558,7 +557,7 @@
   <div id="signatureModal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="sigModalTitle">
     <div class="modal-card modal-md">
       <div class="modal-header">
-        <h2 id="sigModalTitle">Assinatura Digital</h2>
+        <h2 id="sigModalTitle">Assinatura</h2>
         <button class="icon-btn modal-close" data-close-modal="signatureModal" aria-label="Fechar">&times;</button>
       </div>
 

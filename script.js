@@ -22,6 +22,10 @@
      1. CONSTANTES E UTILITÁRIOS
      ========================================================================== */
   const PROJECT_ATTACHMENT_NAME = 'pdf-studio-pro-project.json';
+  // Cópia do PDF sem as edições: é a base usada ao reabrir um PDF editável
+  const ORIGINAL_ATTACHMENT_NAME = 'pdf-studio-pro-original.pdf';
+  const PDF_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const OBJECT_TYPES = ['textbox', 'highlight', 'comment', 'draw', 'shape', 'image', 'signature', 'form'];
 
   const TOOL_META = {
     select:     { label: 'Selecionar',    hint: 'Arraste para mover, use as alças para redimensionar/rotacionar ou clique duplo no texto.' },
@@ -32,7 +36,7 @@
     draw:       { label: 'Desenho Livre', hint: 'Clique e arraste para desenhar à mão livre com curvas suaves.' },
     shape:      { label: 'Forma',         hint: 'Arraste na página para desenhar a forma geométrica selecionada.' },
     image:      { label: 'Imagem',        hint: 'Selecione uma imagem para inserir, mover, redimensionar ou rotacionar.' },
-    signature:  { label: 'Assinatura',    hint: 'Crie ou selecione sua assinatura digital para posicionar no documento.' },
+    signature:  { label: 'Assinatura',    hint: 'Crie ou selecione sua assinatura para posicionar no documento.' },
     form:       { label: 'Formulário',    hint: 'Clique ou arraste na página para criar um campo de formulário interativo (AcroForm).' }
   };
 
@@ -202,6 +206,60 @@
       }, duration);
     },
 
+    /**
+     * Retângulo alinhado aos eixos que envolve uma caixa girada em torno do centro.
+     */
+    rotatedBounds(x, y, width, height, deg = 0) {
+      const rad = (deg * Math.PI) / 180;
+      const w = Math.abs(width * Math.cos(rad)) + Math.abs(height * Math.sin(rad));
+      const h = Math.abs(width * Math.sin(rad)) + Math.abs(height * Math.cos(rad));
+      return { x: x + (width - w) / 2, y: y + (height - h) / 2, width: w, height: h };
+    },
+
+    /** Campos de formulário em PDF só podem girar em múltiplos de 90°. */
+    snapRightAngle(deg = 0) {
+      return Math.round((deg || 0) / 90) * 90;
+    },
+
+    /**
+     * Valida o projeto embutido no PDF: o arquivo pode vir de qualquer pessoa.
+     */
+    sanitizeProject(project) {
+      if (!project || !Array.isArray(project.pages)) return null;
+      const list = (v) => (Array.isArray(v) ? v : []);
+      const hasNumbers = (o, keys) => keys.every(k => Number.isFinite(o[k]));
+      const safeId = (id) => (typeof id === 'string' && /^[\w-]+$/.test(id) ? id : Utils.uid('obj'));
+      const safeImage = (v) => (typeof v === 'string' && v.startsWith('data:image/') ? v : null);
+      const box = ['x', 'y', 'width', 'height'];
+
+      return {
+        pages: project.pages.map((page, pageIndex) => ({
+          textRuns: list(page?.textRuns)
+            .filter(r => r && typeof r.text === 'string' && hasNumbers(r, [...box, 'origX', 'origY', 'origW', 'origH']))
+            .map(r => ({ ...r, pageIndex, id: safeId(r.id) })),
+          objects: list(page?.objects)
+            .filter(o => o && OBJECT_TYPES.includes(o.type) && hasNumbers(o, box))
+            .map(o => ({
+              ...o,
+              pageIndex,
+              id: safeId(o.id),
+              dataUrl: safeImage(o.dataUrl),
+              signatureDataUrl: safeImage(o.signatureDataUrl),
+              points: list(o.points).filter(p => p && hasNumbers(p, ['x', 'y'])),
+              options: list(o.options).map(String)
+            }))
+        }))
+      };
+    },
+
+    /**
+     * Texto que já existia no PDF é uma linha só: a fonte substituta pode ser um
+     * pouco mais larga, e isso não deve quebrá-lo. Só quebra se a caixa for estreitada.
+     */
+    keepsSingleLine(item) {
+      return item.origW !== undefined && item.width >= item.origW;
+    },
+
     deepClone(obj) {
       return JSON.parse(JSON.stringify(obj));
     },
@@ -261,43 +319,64 @@
      ========================================================================== */
   class PDFEngine {
     constructor() {
-      // Configura PDF.js de forma segura tanto para file:// quanto http(s)://
+      // O processamento do PDF roda em um Web Worker, fora da thread da interface
       if (window.pdfjsLib) {
-        if (!window.pdfjsWorker && window.location.protocol !== 'file:') {
-          window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-            'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-        }
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
       }
       this.pdfDoc = null;
       this.originalBytes = null;
       this.pageCanvases = new Map(); // pageIndex -> { canvas, scale }
+      this.renderTasks = new Map(); // canvas -> renderização em andamento
+    }
+
+    openDocument(bytes) {
+      return window.pdfjsLib.getDocument({
+        data: bytes.slice(), // passa cópia para preservar os bytes intactos
+        cMapPacked: true
+      }).promise;
     }
 
     async loadFromBytes(uint8Array) {
-      this.originalBytes = new Uint8Array(uint8Array);
-      this.pageCanvases.clear();
-      const loadingTask = window.pdfjsLib.getDocument({
-        data: this.originalBytes.slice(), // passa cópia para preservar originalBytes intacto
-        cMapPacked: true
-      });
-      this.pdfDoc = await loadingTask.promise;
+      let bytes = new Uint8Array(uint8Array);
+      let pdfDoc = await this.openDocument(bytes);
 
       // Verifica se existe projeto editável embutido anteriormente por este editor
       let embeddedProject = null;
+      let exportedBytes = null;
+      let legacyProject = false;
       try {
-        const attachments = await this.pdfDoc.getAttachments();
-        if (attachments && attachments[PROJECT_ATTACHMENT_NAME]) {
-          const bytes = attachments[PROJECT_ATTACHMENT_NAME].content;
-          const decoded = new TextDecoder('utf-8').decode(bytes);
-          embeddedProject = JSON.parse(decoded);
+        const attachments = await pdfDoc.getAttachments();
+        const projectFile = attachments?.[PROJECT_ATTACHMENT_NAME];
+        if (projectFile) {
+          const originalFile = attachments[ORIGINAL_ATTACHMENT_NAME];
+          if (originalFile) {
+            const decoded = new TextDecoder('utf-8').decode(projectFile.content);
+            const project = Utils.sanitizeProject(JSON.parse(decoded));
+            if (project) {
+              // Reabre sobre o PDF sem edições, para não desenhar tudo duas vezes
+              const originalBytes = new Uint8Array(originalFile.content);
+              pdfDoc = await this.openDocument(originalBytes);
+              exportedBytes = bytes;
+              bytes = originalBytes;
+              embeddedProject = project;
+            }
+          } else {
+            legacyProject = true;
+          }
         }
       } catch (err) {
         console.warn('Sem projeto embutido restaurável:', err);
       }
 
+      this.originalBytes = bytes;
+      this.pdfDoc = pdfDoc;
+      this.pageCanvases.clear();
+
       return {
-        numPages: this.pdfDoc.numPages,
-        embeddedProject
+        numPages: pdfDoc.numPages,
+        embeddedProject,
+        exportedBytes,
+        legacyProject
       };
     }
 
@@ -321,6 +400,14 @@
       const cssViewport = page.getViewport({ scale: zoomScale });
       const renderViewport = page.getViewport({ scale: zoomScale * dpr });
 
+      // O PDF.js não aceita duas renderizações no mesmo canvas: cancela a anterior
+      while (this.renderTasks.has(canvas)) {
+        const running = this.renderTasks.get(canvas);
+        running.cancel();
+        await running.promise.catch(() => {});
+        if (this.renderTasks.get(canvas) === running) this.renderTasks.delete(canvas);
+      }
+
       canvas.width = Math.ceil(renderViewport.width);
       canvas.height = Math.ceil(renderViewport.height);
       canvas.style.width = `${cssViewport.width}px`;
@@ -330,7 +417,16 @@
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      await page.render({ canvasContext: ctx, viewport: renderViewport }).promise;
+      const task = page.render({ canvasContext: ctx, viewport: renderViewport });
+      this.renderTasks.set(canvas, task);
+      try {
+        await task.promise;
+      } catch (err) {
+        if (err?.name === 'RenderingCancelledException') return null;
+        throw err;
+      } finally {
+        if (this.renderTasks.get(canvas) === task) this.renderTasks.delete(canvas);
+      }
       this.pageCanvases.set(pageIndex, { canvas, scale: zoomScale * dpr });
       return cssViewport;
     }
@@ -359,6 +455,10 @@
       const viewport = page.getViewport({ scale: 1 });
       const textContent = await page.getTextContent();
       const styles = textContent.styles || {};
+      // O texto só traz um apelido da fonte (g_d0_f1); o nome real, que indica
+      // negrito e itálico, fica disponível depois de ler os operadores da página
+      await page.getOperatorList();
+      const realFontName = (id) => (page.commonObjs.has(id) ? page.commonObjs.get(id)?.name || id : id);
 
       const rawItems = [];
       for (const item of textContent.items) {
@@ -369,14 +469,19 @@
         const angleRad = Math.atan2(tx[1], tx[0]);
         const angleDeg = Math.round((angleRad * 180) / Math.PI);
 
-        // Coordenadas em pontos PDF (origem topo-esquerda)
-        const x = tx[4];
+        // Coordenadas em pontos PDF (origem topo-esquerda). A caixa é guardada
+        // "deitada" e girada em torno do próprio centro, como na tela.
+        const rotation = Math.abs(angleDeg) < 2 ? 0 : angleDeg;
+        const rad = (rotation * Math.PI) / 180;
         const baselineY = tx[5];
-        const y = baselineY - fontHeight * 0.88;
         const height = fontHeight * 1.18;
         const width = Math.max(item.width || (item.str.length * fontHeight * 0.52), 4);
+        const centerX = tx[4] + Math.cos(rad) * width / 2 + Math.sin(rad) * fontHeight * 0.29;
+        const centerY = baselineY + Math.sin(rad) * width / 2 - Math.cos(rad) * fontHeight * 0.29;
+        const x = centerX - width / 2;
+        const y = centerY - height / 2;
 
-        const fontStyle = Utils.parsePdfFont(item.fontName, styles[item.fontName]);
+        const fontStyle = Utils.parsePdfFont(realFontName(item.fontName), styles[item.fontName]);
 
         rawItems.push({
           str: item.str,
@@ -386,7 +491,7 @@
           width,
           height,
           fontSize: Utils.round1(fontHeight),
-          rotation: Math.abs(angleDeg) < 2 ? 0 : angleDeg,
+          rotation,
           fontFamily: fontStyle.fontFamily,
           bold: fontStyle.bold,
           italic: fontStyle.italic
@@ -404,7 +509,8 @@
           cur.fontFamily === prev.fontFamily &&
           cur.bold === prev.bold &&
           cur.italic === prev.italic &&
-          cur.rotation === prev.rotation;
+          cur.rotation === 0 &&
+          prev.rotation === 0;
 
         const prevRight = prev ? (prev.x + prev.width) : 0;
         const gap = cur.x - prevRight;
@@ -434,6 +540,7 @@
         origFontSize: m.fontSize,
         origBold: m.bold,
         origItalic: m.italic,
+        origRotation: m.rotation,
         // Estado editável atual
         x: Utils.round1(m.x),
         y: Utils.round1(m.y),
@@ -458,6 +565,12 @@
         deleted: false,
         fromOcr: false
       }));
+    }
+
+    /** Amostra as cores na área que o texto original ocupa na página. */
+    sampleColorsForRun(pageIndex, run) {
+      const b = Utils.rotatedBounds(run.origX, run.origY, run.origW, run.origH, run.origRotation);
+      return this.sampleRunColors(pageIndex, b.x, b.y, b.width, b.height);
     }
 
     /**
@@ -577,7 +690,7 @@
       // Banner superior azul-marinho
       p1.drawRectangle({ x: 0, y: height - 108, width, height: 108, color: rgb(0.09, 0.19, 0.36) });
       p1.drawText('RELATÓRIO EXECUTIVO & PROPOSTA COMERCIAL', {
-        x: 42, y: height - 52, size: 18, font: fontBold, color: rgb(1, 1, 1)
+        x: 42, y: height - 52, size: 16, font: fontBold, color: rgb(1, 1, 1)
       });
       p1.drawText('Documento de Demonstração — Teste a edição inline sem quebrar o layout', {
         x: 42, y: height - 76, size: 10.5, font: fontItalic, color: rgb(0.76, 0.85, 0.98)
@@ -621,7 +734,7 @@
 
       const rows = [
         ['Arquitetura & Engenharia Front-end', '01', 'R$ 8.500,00', 'R$ 8.500,00'],
-        ['Integração de Assinatura Digital e PDF', '01', 'R$ 4.200,00', 'R$ 4.200,00'],
+        ['Integração de Assinatura e PDF', '01', 'R$ 4.200,00', 'R$ 4.200,00'],
         ['Testes de Qualidade e Homologação', '02', 'R$ 1.650,00', 'R$ 3.300,00'],
         ['Suporte Técnico e Treinamento', '01', 'R$ 1.800,00', 'R$ 1.800,00']
       ];
@@ -650,7 +763,7 @@
       p1.drawText('Observações Importantes:', { x: 56, y: 205, size: 10.5, font: fontBold, color: rgb(0.55, 0.36, 0.05) });
       p1.drawText('- Todos os valores podem ser editados clicando diretamente sobre os números na tabela.', { x: 56, y: 184, size: 9.5, font: fontReg, color: rgb(0.32, 0.25, 0.1) });
       p1.drawText('- Experimente adicionar destaques, comentários, imagens, formas e campos de formulário.', { x: 56, y: 166, size: 9.5, font: fontReg, color: rgb(0.32, 0.25, 0.1) });
-      p1.drawText('- Na página 2 há uma área dedicada para assinatura digital e preenchimento cadastral.', { x: 56, y: 148, size: 9.5, font: fontReg, color: rgb(0.32, 0.25, 0.1) });
+      p1.drawText('- Na página 2 há uma área dedicada para assinatura e preenchimento cadastral.', { x: 56, y: 148, size: 9.5, font: fontReg, color: rgb(0.32, 0.25, 0.1) });
 
       p1.drawText('Página 1 de 2  •  PDF Studio Pro', { x: 42, y: 34, size: 8.5, font: fontReg, color: rgb(0.45, 0.5, 0.58) });
 
@@ -978,6 +1091,7 @@
           origFontSize: fontSize,
           origBold: false,
           origItalic: false,
+          origRotation: 0,
           x: Utils.round1(x),
           y: Utils.round1(y),
           width: Utils.round1(w),
@@ -1015,17 +1129,63 @@
     }
 
     /**
-     * Calcula a posição (x, y) compensada para rotação em torno do centro no pdf-lib.
+     * Espaço "como na tela" da página: origem embaixo à esquerda, já considerando
+     * a rotação e o recorte do PDF. `matrix` leva desse espaço para o do arquivo.
      */
-    rotatedRectOrigin(x, yTop, w, h, pageH, rotDeg) {
-      const cx = x + w / 2;
-      const cy = pageH - (yTop + h / 2);
-      const rad = (-rotDeg * Math.PI) / 180; // CSS clockwise -> PDF counter-clockwise
-      const dx = -w / 2;
-      const dy = -h / 2;
-      const rx = cx + dx * Math.cos(rad) - dy * Math.sin(rad);
-      const ry = cy + dx * Math.sin(rad) + dy * Math.cos(rad);
-      return { x: rx, y: ry, angleDeg: -rotDeg };
+    async getPageSpace(pageIndex) {
+      const page = await this.pdfEngine.pdfDoc.getPage(pageIndex + 1);
+      const vp = page.getViewport({ scale: 1 });
+      const toPdf = (x, yUp) => {
+        const [px, py] = vp.convertToPdfPoint(x, vp.height - yUp);
+        return { x: px, y: py };
+      };
+      const o = toPdf(0, 0);
+      const ux = toPdf(1, 0);
+      const uy = toPdf(0, 1);
+      return {
+        width: vp.width,
+        height: vp.height,
+        rotation: vp.rotation,
+        toPdf,
+        matrix: [ux.x - o.x, ux.y - o.y, uy.x - o.x, uy.y - o.y, o.x, o.y]
+      };
+    }
+
+    /**
+     * Executa o desenho girado em torno de (cx, cy). `rotDeg` é horário, como no CSS.
+     */
+    async withRotation(page, cx, cy, rotDeg, draw) {
+      if (!rotDeg) return draw();
+      const { pushGraphicsState, popGraphicsState, concatTransformationMatrix } = PDFLib;
+      const rad = (-rotDeg * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      page.pushOperators(
+        pushGraphicsState(),
+        concatTransformationMatrix(cos, sin, -sin, cos, cx - cos * cx + sin * cy, cy - sin * cx - cos * cy)
+      );
+      await draw();
+      page.pushOperators(popGraphicsState());
+    }
+
+    /** Remove os anexos de projeto que uma exportação anterior tenha deixado. */
+    stripProjectAttachments(pdfDoc) {
+      const { PDFName, PDFDict, PDFArray } = PDFLib;
+      const ours = [PROJECT_ATTACHMENT_NAME, ORIGINAL_ATTACHMENT_NAME];
+      const names = pdfDoc.catalog.lookupMaybe(PDFName.of('Names'), PDFDict);
+      const files = names?.lookupMaybe(PDFName.of('EmbeddedFiles'), PDFDict);
+      const entries = files?.lookupMaybe(PDFName.of('Names'), PDFArray);
+      if (!entries) return;
+      const associated = pdfDoc.catalog.lookupMaybe(PDFName.of('AF'), PDFArray);
+      for (let i = entries.size() - 2; i >= 0; i -= 2) {
+        if (!ours.includes(entries.lookup(i).decodeText())) continue;
+        const ref = entries.get(i + 1);
+        for (let j = (associated?.size() || 0) - 1; j >= 0; j--) {
+          if (associated.get(j) === ref) associated.remove(j);
+        }
+        entries.remove(i + 1);
+        entries.remove(i);
+      }
     }
 
     /**
@@ -1052,7 +1212,7 @@
       ctx.textBaseline = 'top';
 
       const lineH = item.fontSize * (item.lineHeight || 1.15);
-      const lines = Utils.wrapTextLines(item.text, Math.max(item.width - 4, 12), (s) => ctx.measureText(s).width);
+      const lines = Utils.wrapTextLines(item.text, Utils.keepsSingleLine(item) ? Infinity : Math.max(item.width - 4, 12), (s) => ctx.measureText(s).width);
 
       lines.forEach((line, idx) => {
         const ly = idx * lineH + 1;
@@ -1077,34 +1237,36 @@
     /**
      * Desenha texto vetorial no pdf-lib preservando alinhamento, espaçamento, sublinhado e tachado.
      */
-    async drawTextBlock(pdfDoc, page, item, fontCache) {
-      const { rgb, degrees } = PDFLib;
-      const pageH = page.getHeight();
-      const rot = item.rotation || 0;
+    async drawTextBlock(pdfDoc, page, item, fontCache, pageH) {
+      const cx = item.x + item.width / 2;
+      const cy = pageH - (item.y + item.height / 2);
+      await this.withRotation(page, cx, cy, item.rotation, () =>
+        this.drawUprightText(pdfDoc, page, item, fontCache, pageH));
+    }
+
+    async drawUprightText(pdfDoc, page, item, fontCache, pageH) {
+      const { rgb } = PDFLib;
       const opacity = item.opacity != null ? item.opacity : 1;
 
       // Fundo da caixa de texto (se não transparente)
       if (item.bgColor && !item.bgTransparent) {
         const bg = Utils.hexToRgb01(item.bgColor);
-        const pos = this.rotatedRectOrigin(item.x, item.y, item.width, item.height, pageH, rot);
         page.drawRectangle({
-          x: pos.x, y: pos.y, width: item.width, height: item.height,
-          color: rgb(bg.r, bg.g, bg.b), opacity,
-          rotate: degrees(pos.angleDeg)
+          x: item.x, y: pageH - item.y - item.height, width: item.width, height: item.height,
+          color: rgb(bg.r, bg.g, bg.b), opacity
         });
       }
 
       const text = String(item.text || '');
       if (!text.trim()) return;
 
-      // Fallback para Unicode fora de WinAnsi ou texto rotacionado multilinha
-      if (!Utils.isWinAnsiSafe(text) || (rot !== 0 && text.includes('\n'))) {
+      // Fallback para Unicode fora de WinAnsi
+      if (!Utils.isWinAnsiSafe(text)) {
         const pngBytes = await this.rasterizeTextToPng({ ...item, bgTransparent: true });
         const img = await pdfDoc.embedPng(pngBytes);
-        const pos = this.rotatedRectOrigin(item.x, item.y, item.width + 6, item.height + 6, pageH, rot);
         page.drawImage(img, {
-          x: pos.x, y: pos.y, width: item.width + 6, height: item.height + 6,
-          opacity, rotate: degrees(pos.angleDeg)
+          x: item.x, y: pageH - item.y - (item.height + 6),
+          width: item.width + 6, height: item.height + 6, opacity
         });
         return;
       }
@@ -1119,7 +1281,7 @@
       const col = Utils.hexToRgb01(item.color || '#111111');
       const maxW = Math.max(item.width - 2, size * 2);
 
-      const lines = Utils.wrapTextLines(text, maxW, (s) => font.widthOfTextAtSize(s, size));
+      const lines = Utils.wrapTextLines(text, Utils.keepsSingleLine(item) ? Infinity : maxW, (s) => font.widthOfTextAtSize(s, size));
 
       lines.forEach((line, idx) => {
         if (!line) return;
@@ -1132,7 +1294,7 @@
         const baselinePdfY = pageH - (lineTopY + size * 0.88);
         const drawX = item.x + offsetX;
 
-        if (item.align === 'justify' && idx < lines.length - 1 && line.includes(' ') && rot === 0) {
+        if (item.align === 'justify' && idx < lines.length - 1 && line.includes(' ')) {
           const words = line.trim().split(/\s+/);
           if (words.length > 1) {
             const wordsWidth = words.reduce((acc, w) => acc + font.widthOfTextAtSize(w, size), 0);
@@ -1152,21 +1314,20 @@
             size,
             font,
             color: rgb(col.r, col.g, col.b),
-            opacity,
-            rotate: degrees(-rot)
+            opacity
           });
         }
 
         // Sublinhado e Tachado vetoriais
         const decoThick = Math.max(0.6, size * 0.065);
-        if (item.underline && rot === 0) {
+        if (item.underline) {
           page.drawLine({
             start: { x: drawX, y: baselinePdfY - size * 0.14 },
             end: { x: drawX + lineW, y: baselinePdfY - size * 0.14 },
             thickness: decoThick, color: rgb(col.r, col.g, col.b), opacity
           });
         }
-        if (item.strikethrough && rot === 0) {
+        if (item.strikethrough) {
           page.drawLine({
             start: { x: drawX, y: baselinePdfY + size * 0.3 },
             end: { x: drawX + lineW, y: baselinePdfY + size * 0.3 },
@@ -1180,7 +1341,7 @@
      * Modo 1 & 2: Constrói PDF vetorial nativo via pdf-lib sobre os bytes originais.
      */
     async exportVectorPdf(pagesState, { editable = false, flattenForms = false, onProgress } = {}) {
-      const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
+      const { PDFDocument, StandardFonts, rgb, pushGraphicsState, popGraphicsState, concatTransformationMatrix } = PDFLib;
       if (onProgress) onProgress(10, 'Carregando estrutura original do PDF...');
 
       const pdfDoc = await PDFDocument.load(this.pdfEngine.originalBytes.slice(), {
@@ -1188,11 +1349,18 @@
       });
       pdfDoc.setCreator('PDF Studio Pro');
       pdfDoc.setProducer('PDF Studio Pro (pdf-lib)');
+      this.stripProjectAttachments(pdfDoc);
 
       const fontCache = new Map();
       const form = pdfDoc.getForm();
       const radioGroups = new Map();
       const usedFieldNames = new Set();
+      form.getFields().forEach(f => {
+        usedFieldNames.add(f.getName());
+        usedFieldNames.add(f.getName().split('.')[0]);
+      });
+      const createdFields = new Set();
+      const exportedFields = new Map(); // obj.id -> dados do campo gravado
 
       const uniqueFieldName = (base) => {
         let name = (base || 'campo').replace(/[^a-zA-Z0-9_-]/g, '_') || 'campo';
@@ -1214,14 +1382,19 @@
         }
 
         const page = pages[pIdx];
-        const pageH = page.getHeight();
         const pData = pagesState[pIdx];
         if (!pData) continue;
+        const changedRuns = pData.textRuns.filter(r => r.edited || r.moved || r.deleted);
+        if (!changedRuns.length && !pData.objects.length) continue;
+
+        const space = await this.getPageSpace(pIdx);
+        const pageH = space.height;
+        page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...space.matrix));
 
         // 1. Máscaras de texto original editado, movido ou excluído
-        for (const run of pData.textRuns) {
-          if (run.edited || run.moved || run.deleted) {
-            const maskCol = Utils.hexToRgb01(run.maskColor || '#ffffff');
+        for (const run of changedRuns) {
+          const maskCol = Utils.hexToRgb01(run.maskColor || '#ffffff');
+          await this.withRotation(page, run.origX + run.origW / 2, pageH - (run.origY + run.origH / 2), run.origRotation, () => {
             page.drawRectangle({
               x: run.origX - 1.5,
               y: pageH - (run.origY + run.origH) - 1.5,
@@ -1229,16 +1402,13 @@
               height: run.origH + 3,
               color: rgb(maskCol.r, maskCol.g, maskCol.b)
             });
-          }
+          });
         }
 
         // 2. Textos originais editados / movidos (não excluídos)
-        for (const run of pData.textRuns) {
-          if ((run.edited || run.moved) && !run.deleted) {
-            await this.drawTextBlock(pdfDoc, page, {
-              ...run,
-              bgTransparent: true
-            }, fontCache);
+        for (const run of changedRuns) {
+          if (!run.deleted) {
+            await this.drawTextBlock(pdfDoc, page, { ...run, bgTransparent: true }, fontCache, pageH);
           }
         }
 
@@ -1247,176 +1417,52 @@
 
         for (const obj of sortedObjs) {
           const op = obj.opacity != null ? obj.opacity : 1;
-          const rot = obj.rotation || 0;
+          const rot = obj.type === 'form' ? Utils.snapRightAngle(obj.rotation) : (obj.rotation || 0);
+          const cx = obj.x + obj.width / 2;
+          const cy = pageH - (obj.y + obj.height / 2);
+          const yPdf = pageH - (obj.y + obj.height);
+          const box = { x: obj.x, y: yPdf, width: obj.width, height: obj.height };
 
-          if (obj.type === 'highlight') {
-            const c = Utils.hexToRgb01(obj.color || '#fde047');
-            const pos = this.rotatedRectOrigin(obj.x, obj.y, obj.width, obj.height, pageH, rot);
-            page.drawRectangle({
-              x: pos.x, y: pos.y, width: obj.width, height: obj.height,
-              color: rgb(c.r, c.g, c.b),
-              opacity: Math.min(op, 0.38),
-              rotate: degrees(pos.angleDeg)
-            });
-          } else if (obj.type === 'textbox') {
-            await this.drawTextBlock(pdfDoc, page, obj, fontCache);
-          } else if (obj.type === 'image' || obj.type === 'signature') {
-            if (!obj.dataUrl) continue;
-            try {
-              const pngBytes = await Utils.dataUrlToPngBytes(obj.dataUrl);
-              const embedded = await pdfDoc.embedPng(pngBytes);
-              const pos = this.rotatedRectOrigin(obj.x, obj.y, obj.width, obj.height, pageH, rot);
-              page.drawImage(embedded, {
-                x: pos.x, y: pos.y, width: obj.width, height: obj.height,
-                opacity: op, rotate: degrees(pos.angleDeg)
-              });
-            } catch (e) {
-              console.warn('Imagem ignorada na exportação:', e);
-            }
-          } else if (obj.type === 'shape') {
-            const sc = Utils.hexToRgb01(obj.strokeColor || '#2563eb');
-            const fc = Utils.hexToRgb01(obj.fillColor || '#3b82f6');
-            const sw = obj.strokeWidth != null ? obj.strokeWidth : 2;
-            const hasFill = !obj.fillTransparent;
+          if (obj.type === 'textbox') {
+            await this.drawTextBlock(pdfDoc, page, obj, fontCache, pageH);
+            continue;
+          }
 
-            if (obj.shapeType === 'rect') {
-              const pos = this.rotatedRectOrigin(obj.x, obj.y, obj.width, obj.height, pageH, rot);
-              page.drawRectangle({
-                x: pos.x, y: pos.y, width: obj.width, height: obj.height,
-                borderColor: sw > 0 ? rgb(sc.r, sc.g, sc.b) : undefined,
-                borderWidth: sw,
-                color: hasFill ? rgb(fc.r, fc.g, fc.b) : undefined,
-                opacity: hasFill ? op : undefined,
-                borderOpacity: op,
-                rotate: degrees(pos.angleDeg)
-              });
-            } else if (obj.shapeType === 'ellipse') {
-              page.drawEllipse({
-                x: obj.x + obj.width / 2,
-                y: pageH - (obj.y + obj.height / 2),
-                xScale: obj.width / 2,
-                yScale: obj.height / 2,
-                borderColor: sw > 0 ? rgb(sc.r, sc.g, sc.b) : undefined,
-                borderWidth: sw,
-                color: hasFill ? rgb(fc.r, fc.g, fc.b) : undefined,
-                opacity: hasFill ? op : undefined,
-                borderOpacity: op
-              });
-            } else if (obj.shapeType === 'line' || obj.shapeType === 'arrow') {
-              const cx = obj.x + obj.width / 2;
-              const cy = pageH - (obj.y + obj.height / 2);
-              const rad = (-rot * Math.PI) / 180;
-              const rotPt = (px, py) => ({
-                x: cx + (px - cx) * Math.cos(rad) - (py - cy) * Math.sin(rad),
-                y: cy + (px - cx) * Math.sin(rad) + (py - cy) * Math.cos(rad)
-              });
-              const pStart = rotPt(obj.x, pageH - (obj.y + obj.height / 2));
-              const pEnd = rotPt(obj.x + obj.width, pageH - (obj.y + obj.height / 2));
-
-              page.drawLine({
-                start: pStart, end: pEnd,
-                thickness: Math.max(1, sw),
-                color: rgb(sc.r, sc.g, sc.b),
-                opacity: op
-              });
-
-              if (obj.shapeType === 'arrow') {
-                const ang = Math.atan2(pEnd.y - pStart.y, pEnd.x - pStart.x);
-                const headLen = Math.max(8, sw * 4.5);
-                const a1 = ang - Math.PI / 6;
-                const a2 = ang + Math.PI / 6;
-                page.drawLine({
-                  start: pEnd,
-                  end: { x: pEnd.x - headLen * Math.cos(a1), y: pEnd.y - headLen * Math.sin(a1) },
-                  thickness: Math.max(1, sw), color: rgb(sc.r, sc.g, sc.b), opacity: op
-                });
-                page.drawLine({
-                  start: pEnd,
-                  end: { x: pEnd.x - headLen * Math.cos(a2), y: pEnd.y - headLen * Math.sin(a2) },
-                  thickness: Math.max(1, sw), color: rgb(sc.r, sc.g, sc.b), opacity: op
-                });
-              }
-            }
-          } else if (obj.type === 'draw' && obj.points && obj.points.length > 1) {
-            const sc = Utils.hexToRgb01(obj.strokeColor || '#2563eb');
-            const sw = Math.max(1, obj.strokeWidth || 2);
-            const cx = obj.x + obj.width / 2;
-            const cy = pageH - (obj.y + obj.height / 2);
-            const rad = (-rot * Math.PI) / 180;
-            const mapPt = (pt) => {
-              const absX = obj.x + pt.x * obj.width;
-              const absY = pageH - (obj.y + pt.y * obj.height);
-              if (!rot) return { x: absX, y: absY };
-              return {
-                x: cx + (absX - cx) * Math.cos(rad) - (absY - cy) * Math.sin(rad),
-                y: cy + (absX - cx) * Math.sin(rad) + (absY - cy) * Math.cos(rad)
-              };
-            };
-            for (let i = 1; i < obj.points.length; i++) {
-              page.drawLine({
-                start: mapPt(obj.points[i - 1]),
-                end: mapPt(obj.points[i]),
-                thickness: sw,
-                color: rgb(sc.r, sc.g, sc.b),
-                opacity: op
-              });
-            }
-          } else if (obj.type === 'comment') {
-            // Desenha marcador visual de comentário + nota compacta se tiver texto
-            const yPdf = pageH - (obj.y + obj.height);
-            page.drawCircle({
-              x: obj.x + obj.width / 2,
-              y: yPdf + obj.height / 2,
-              size: obj.width / 2,
-              color: rgb(0.98, 0.8, 0.08),
-              borderColor: rgb(0.63, 0.38, 0.03),
-              borderWidth: 1.4
-            });
-            if (!fontCache.has(StandardFonts.HelveticaBold)) {
-              fontCache.set(StandardFonts.HelveticaBold, await pdfDoc.embedFont(StandardFonts.HelveticaBold));
-            }
-            const fBold = fontCache.get(StandardFonts.HelveticaBold);
-            page.drawText('!', {
-              x: obj.x + obj.width / 2 - 2.5,
-              y: yPdf + obj.height / 2 - 4,
-              size: 11, font: fBold, color: rgb(0.26, 0.13, 0.02)
-            });
-
-            if (obj.text && obj.text.trim()) {
-              const noteX = Math.min(obj.x + obj.width + 6, page.getWidth() - 165);
-              const noteW = 155;
-              const noteH = 44;
-              const noteY = Math.max(10, yPdf - 14);
-              page.drawRectangle({
-                x: noteX, y: noteY, width: noteW, height: noteH,
-                color: rgb(0.996, 0.976, 0.76),
-                borderColor: rgb(0.85, 0.65, 0.05),
-                borderWidth: 0.8
-              });
-              const safeLabel = Utils.isWinAnsiSafe(obj.text) ? obj.text.slice(0, 65) : 'Comentario';
-              page.drawText(safeLabel, {
-                x: noteX + 5, y: noteY + noteH - 14, size: 7.5,
-                font: fBold, color: rgb(0.15, 0.15, 0.15), maxWidth: noteW - 10, lineHeight: 9
-              });
-            }
-          } else if (obj.type === 'form') {
-            const yPdf = pageH - (obj.y + obj.height);
+          if (obj.type === 'form') {
             const fName = uniqueFieldName(obj.fieldName || `campo_${obj.formType}`);
+            const style = { borderWidth: 1, borderColor: rgb(0.15, 0.39, 0.92), backgroundColor: rgb(0.96, 0.98, 1) };
+            // O widget não segue a matriz da página: posiciona direto no espaço do arquivo
+            const placeWidget = (field) => {
+              const widgets = field.acroField.getWidgets();
+              const widget = widgets[widgets.length - 1];
+              const sideways = Math.abs(rot % 180) === 90;
+              const w = sideways ? obj.height : obj.width;
+              const h = sideways ? obj.width : obj.height;
+              const a = space.toPdf(cx - w / 2, cy - h / 2);
+              const b = space.toPdf(cx + w / 2, cy + h / 2);
+              widget.setRectangle({
+                x: Math.min(a.x, b.x), y: Math.min(a.y, b.y),
+                width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y)
+              });
+              widget.getOrCreateAppearanceCharacteristics()
+                .setRotation((((space.rotation - rot) % 360) + 360) % 360);
+              if (obj.required) field.enableRequired();
+              createdFields.add(field);
+            };
 
             if (obj.formType === 'text') {
               const tf = form.createTextField(fName);
-              if (obj.value && Utils.isWinAnsiSafe(obj.value)) tf.setText(obj.value);
-              tf.addToPage(page, {
-                x: obj.x, y: yPdf, width: obj.width, height: obj.height,
-                borderWidth: 1, borderColor: rgb(0.15, 0.39, 0.92), backgroundColor: rgb(0.94, 0.97, 1)
-              });
+              const value = obj.value && Utils.isWinAnsiSafe(obj.value) ? obj.value : '';
+              if (value) tf.setText(value);
+              tf.addToPage(page, { ...box, ...style });
+              placeWidget(tf);
+              exportedFields.set(obj.id, { exportName: fName, exportValue: value });
             } else if (obj.formType === 'checkbox') {
               const cb = form.createCheckBox(fName);
-              cb.addToPage(page, {
-                x: obj.x, y: yPdf, width: obj.width, height: obj.height,
-                borderWidth: 1, borderColor: rgb(0.15, 0.39, 0.92), backgroundColor: rgb(0.96, 0.98, 1)
-              });
+              cb.addToPage(page, { ...box, ...style });
+              placeWidget(cb);
               if (obj.checked) cb.check();
+              exportedFields.set(obj.id, { exportName: fName });
             } else if (obj.formType === 'radio') {
               const gName = (obj.radioGroup || 'grupo_radio').replace(/[^a-zA-Z0-9_-]/g, '_');
               let rg = radioGroups.get(gName);
@@ -1425,46 +1471,152 @@
                 radioGroups.set(gName, rg);
               }
               const optVal = obj.value || fName;
-              rg.addOptionToPage(optVal, page, {
-                x: obj.x, y: yPdf, width: obj.width, height: obj.height,
-                borderWidth: 1, borderColor: rgb(0.15, 0.39, 0.92), backgroundColor: rgb(0.96, 0.98, 1)
-              });
+              rg.addOptionToPage(optVal, page, { ...box, ...style });
+              placeWidget(rg);
               if (obj.checked) rg.select(optVal);
+              exportedFields.set(obj.id, { exportName: rg.getName(), exportOption: optVal });
             } else if (obj.formType === 'dropdown') {
               const dd = form.createDropdown(fName);
               const opts = (obj.options && obj.options.length ? obj.options : ['Opção 1', 'Opção 2'])
                 .map(o => (Utils.isWinAnsiSafe(o) ? o : 'Opcao'));
               dd.addOptions(opts);
-              if (obj.value && opts.includes(obj.value)) dd.select(obj.value);
-              dd.addToPage(page, {
-                x: obj.x, y: yPdf, width: obj.width, height: obj.height,
-                borderWidth: 1, borderColor: rgb(0.15, 0.39, 0.92), backgroundColor: rgb(0.94, 0.97, 1)
-              });
+              const value = obj.value && opts.includes(obj.value) ? obj.value : '';
+              if (value) dd.select(value);
+              dd.addToPage(page, { ...box, ...style });
+              placeWidget(dd);
+              exportedFields.set(obj.id, { exportName: fName, exportValue: value });
             } else if (obj.formType === 'signature') {
-              page.drawRectangle({
-                x: obj.x, y: yPdf, width: obj.width, height: obj.height,
-                borderWidth: 1, borderColor: rgb(0.15, 0.39, 0.92),
-                color: rgb(0.95, 0.97, 1)
-              });
-              if (obj.signatureDataUrl) {
-                const pngBytes = await Utils.dataUrlToPngBytes(obj.signatureDataUrl);
-                const sigImg = await pdfDoc.embedPng(pngBytes);
-                page.drawImage(sigImg, {
-                  x: obj.x + 4, y: yPdf + 4,
-                  width: Math.max(10, obj.width - 8),
-                  height: Math.max(10, obj.height - 8)
+              await this.withRotation(page, cx, cy, rot, async () => {
+                page.drawRectangle({
+                  ...box,
+                  borderWidth: 1, borderColor: rgb(0.15, 0.39, 0.92),
+                  color: rgb(0.95, 0.97, 1)
                 });
-              } else {
+                if (obj.signatureDataUrl) {
+                  const pngBytes = await Utils.dataUrlToPngBytes(obj.signatureDataUrl);
+                  const sigImg = await pdfDoc.embedPng(pngBytes);
+                  page.drawImage(sigImg, {
+                    x: obj.x + 4, y: yPdf + 4,
+                    width: Math.max(10, obj.width - 8),
+                    height: Math.max(10, obj.height - 8)
+                  });
+                }
+              });
+              if (!obj.signatureDataUrl) {
                 const tf = form.createTextField(fName);
                 tf.setText('Assinar aqui');
-                tf.addToPage(page, {
-                  x: obj.x, y: yPdf, width: obj.width, height: obj.height,
-                  borderWidth: 1, borderColor: rgb(0.15, 0.39, 0.92)
+                tf.addToPage(page, { ...box, borderWidth: 1, borderColor: style.borderColor });
+                placeWidget(tf);
+              }
+            }
+            continue;
+          }
+
+          await this.withRotation(page, cx, cy, rot, async () => {
+            if (obj.type === 'highlight') {
+              const c = Utils.hexToRgb01(obj.color || '#fde047');
+              page.drawRectangle({ ...box, color: rgb(c.r, c.g, c.b), opacity: Math.min(op, 0.38) });
+            } else if (obj.type === 'image' || obj.type === 'signature') {
+              if (!obj.dataUrl) return;
+              try {
+                const pngBytes = await Utils.dataUrlToPngBytes(obj.dataUrl);
+                const embedded = await pdfDoc.embedPng(pngBytes);
+                page.drawImage(embedded, { ...box, opacity: op });
+              } catch (e) {
+                console.warn('Imagem ignorada na exportação:', e);
+              }
+            } else if (obj.type === 'shape') {
+              const sc = Utils.hexToRgb01(obj.strokeColor || '#2563eb');
+              const fc = Utils.hexToRgb01(obj.fillColor || '#3b82f6');
+              const sw = obj.strokeWidth != null ? obj.strokeWidth : 2;
+              const hasFill = !obj.fillTransparent;
+              const paint = {
+                borderColor: sw > 0 ? rgb(sc.r, sc.g, sc.b) : undefined,
+                borderWidth: sw,
+                color: hasFill ? rgb(fc.r, fc.g, fc.b) : undefined,
+                opacity: hasFill ? op : undefined,
+                borderOpacity: op
+              };
+
+              if (obj.shapeType === 'rect') {
+                page.drawRectangle({ ...box, ...paint });
+              } else if (obj.shapeType === 'ellipse') {
+                page.drawEllipse({ x: cx, y: cy, xScale: obj.width / 2, yScale: obj.height / 2, ...paint });
+              } else if (obj.shapeType === 'line' || obj.shapeType === 'arrow') {
+                const end = { x: obj.x + obj.width, y: cy };
+                const line = { thickness: Math.max(1, sw), color: rgb(sc.r, sc.g, sc.b), opacity: op };
+                page.drawLine({ start: { x: obj.x, y: cy }, end, ...line });
+                if (obj.shapeType === 'arrow') {
+                  const headLen = Math.max(8, sw * 4.5);
+                  for (const a of [-Math.PI / 6, Math.PI / 6]) {
+                    page.drawLine({
+                      start: end,
+                      end: { x: end.x - headLen * Math.cos(a), y: end.y - headLen * Math.sin(a) },
+                      ...line
+                    });
+                  }
+                }
+              }
+            } else if (obj.type === 'draw' && obj.points && obj.points.length > 1) {
+              const sc = Utils.hexToRgb01(obj.strokeColor || '#2563eb');
+              const sw = Math.max(1, obj.strokeWidth || 2);
+              const mapPt = (pt) => ({ x: obj.x + pt.x * obj.width, y: pageH - (obj.y + pt.y * obj.height) });
+              for (let i = 1; i < obj.points.length; i++) {
+                page.drawLine({
+                  start: mapPt(obj.points[i - 1]),
+                  end: mapPt(obj.points[i]),
+                  thickness: sw,
+                  color: rgb(sc.r, sc.g, sc.b),
+                  opacity: op
+                });
+              }
+            } else if (obj.type === 'comment') {
+              // Desenha marcador visual de comentário + nota compacta se tiver texto
+              page.drawCircle({
+                x: cx,
+                y: cy,
+                size: obj.width / 2,
+                color: rgb(0.98, 0.8, 0.08),
+                borderColor: rgb(0.63, 0.38, 0.03),
+                borderWidth: 1.4
+              });
+              if (!fontCache.has(StandardFonts.HelveticaBold)) {
+                fontCache.set(StandardFonts.HelveticaBold, await pdfDoc.embedFont(StandardFonts.HelveticaBold));
+              }
+              const fBold = fontCache.get(StandardFonts.HelveticaBold);
+              page.drawText('!', {
+                x: cx - 2.5,
+                y: cy - 4,
+                size: 11, font: fBold, color: rgb(0.26, 0.13, 0.02)
+              });
+
+              if (obj.text && obj.text.trim()) {
+                const noteX = Math.min(obj.x + obj.width + 6, space.width - 165);
+                const noteW = 155;
+                const noteH = 44;
+                const noteY = Math.max(10, yPdf - 14);
+                page.drawRectangle({
+                  x: noteX, y: noteY, width: noteW, height: noteH,
+                  color: rgb(0.996, 0.976, 0.76),
+                  borderColor: rgb(0.85, 0.65, 0.05),
+                  borderWidth: 0.8
+                });
+                const safeLabel = Utils.isWinAnsiSafe(obj.text) ? obj.text.slice(0, 65) : 'Comentario';
+                page.drawText(safeLabel, {
+                  x: noteX + 5, y: noteY + noteH - 14, size: 7.5,
+                  font: fBold, color: rgb(0.15, 0.15, 0.15), maxWidth: noteW - 10, lineHeight: 9
                 });
               }
             }
-          }
+          });
         }
+
+        page.pushOperators(popGraphicsState());
+      }
+
+      if (createdFields.size) {
+        const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+        createdFields.forEach(field => field.defaultUpdateAppearances(helvetica));
       }
 
       if (flattenForms) {
@@ -1475,13 +1627,17 @@
       if (editable) {
         if (onProgress) onProgress(90, 'Embutindo camadas editáveis no PDF...');
         const payload = {
-          version: 1,
+          version: 2,
           exportedAt: new Date().toISOString(),
           pages: pagesState.map(p => ({
             textRuns: p.textRuns.filter(r => r.edited || r.moved || r.deleted || r.fromOcr),
-            objects: p.objects
+            objects: p.objects.map(o => ({ ...o, ...exportedFields.get(o.id) }))
           }))
         };
+        await pdfDoc.attach(this.pdfEngine.originalBytes.slice(), ORIGINAL_ATTACHMENT_NAME, {
+          mimeType: 'application/pdf',
+          description: 'PDF Studio Pro Original Document'
+        });
         const jsonBytes = new TextEncoder().encode(JSON.stringify(payload));
         await pdfDoc.attach(jsonBytes, PROJECT_ATTACHMENT_NAME, {
           mimeType: 'application/json',
@@ -1532,8 +1688,12 @@
           // 1. Máscaras de texto original editado/movido/excluído
           for (const run of pData.textRuns) {
             if (run.edited || run.moved || run.deleted) {
+              ctx.save();
+              ctx.translate(run.origX + run.origW / 2, run.origY + run.origH / 2);
+              ctx.rotate(((run.origRotation || 0) * Math.PI) / 180);
               ctx.fillStyle = run.maskColor || '#ffffff';
-              ctx.fillRect(run.origX - 1.5, run.origY - 1.5, run.origW + 3, run.origH + 3);
+              ctx.fillRect(-run.origW / 2 - 1.5, -run.origH / 2 - 1.5, run.origW + 3, run.origH + 3);
+              ctx.restore();
             }
           }
 
@@ -1587,7 +1747,7 @@
       ctx.textBaseline = 'top';
 
       const lineH = item.fontSize * (item.lineHeight || 1.15);
-      const lines = Utils.wrapTextLines(item.text, Math.max(item.width - 2, 12), (s) => ctx.measureText(s).width);
+      const lines = Utils.wrapTextLines(item.text, Utils.keepsSingleLine(item) ? Infinity : Math.max(item.width - 2, 12), (s) => ctx.measureText(s).width);
 
       lines.forEach((line, idx) => {
         const ly = item.y + idx * lineH;
@@ -1856,16 +2016,27 @@
       }
     }
 
-    async loadPdfBytes(uint8Array, fileName = 'documento.pdf') {
+    /** Aberturas são feitas uma de cada vez, para um arquivo não se misturar com outro. */
+    loadPdfBytes(uint8Array, fileName = 'documento.pdf') {
+      const run = () => this.performLoad(uint8Array, fileName);
+      this.loadQueue = (this.loadQueue || Promise.resolve()).then(run, run);
+      return this.loadQueue;
+    }
+
+    async performLoad(uint8Array, fileName) {
       Utils.toast('Carregando documento PDF...', 'info', 1800);
-      const { numPages, embeddedProject } = await this.pdfEngine.loadFromBytes(uint8Array);
+      const { numPages, embeddedProject, exportedBytes, legacyProject } = await this.pdfEngine.loadFromBytes(uint8Array);
+      this.renderGeneration++; // interrompe a renderização do documento anterior
+      if (embeddedProject) await this.syncFormValues(exportedBytes, embeddedProject);
 
       this.state.fileName = fileName;
       this.state.numPages = numPages;
       this.state.currentPage = 0;
       this.state.selected = null;
       this.state.pages = [];
+      this.state.zCounter = 10;
       this.history.clear();
+      this.updateInspector();
 
       this.dom.docTitleInput.value = fileName;
       this.dom.pageCountLabel.textContent = String(numPages);
@@ -1889,23 +2060,25 @@
       }
 
       // Se o PDF foi exportado anteriormente no modo "PDF Editável", restaura as camadas!
-      if (embeddedProject && Array.isArray(embeddedProject.pages)) {
+      if (embeddedProject) {
         embeddedProject.pages.forEach((savedPage, idx) => {
-          if (!this.state.pages[idx]) return;
-          if (Array.isArray(savedPage.objects)) {
-            this.state.pages[idx].objects = savedPage.objects;
-          }
-          if (Array.isArray(savedPage.textRuns)) {
-            for (const sr of savedPage.textRuns) {
-              const match = this.state.pages[idx].textRuns.find(
-                r => Math.abs(r.origX - sr.origX) < 3 && Math.abs(r.origY - sr.origY) < 3
-              );
-              if (match) Object.assign(match, sr, { id: match.id });
-              else this.state.pages[idx].textRuns.push(sr);
-            }
+          const pData = this.state.pages[idx];
+          if (!pData) return;
+          pData.objects = savedPage.objects;
+          savedPage.objects.forEach(o => {
+            this.state.zCounter = Math.max(this.state.zCounter, o.zIndex || 0);
+          });
+          for (const sr of savedPage.textRuns) {
+            const match = !sr.fromOcr && pData.textRuns.find(
+              r => r.origText === sr.origText && Math.abs(r.origX - sr.origX) < 3 && Math.abs(r.origY - sr.origY) < 3
+            );
+            if (match) Object.assign(match, sr, { id: match.id });
+            else pData.textRuns.push(sr);
           }
         });
         Utils.toast('Projeto editável detectado e camadas restauradas!', 'success', 3800);
+      } else if (legacyProject) {
+        Utils.toast('PDF editável de uma versão antiga: as edições anteriores já fazem parte da página.', 'warning', 5000);
       }
 
       this.dom.welcomeScreen.hidden = true;
@@ -1929,6 +2102,42 @@
       this.updateSidebars();
       this.updateStatusBar();
       Utils.toast(`"${fileName}" carregado (${numPages} ${numPages === 1 ? 'página' : 'páginas'}).`, 'success');
+    }
+
+    /**
+     * Traz para as camadas o que foi preenchido no PDF editável em outro leitor.
+     */
+    async syncFormValues(exportedBytes, project) {
+      let form;
+      try {
+        const doc = await PDFLib.PDFDocument.load(exportedBytes, { ignoreEncryption: true });
+        form = doc.getForm();
+      } catch (err) {
+        console.warn('Não foi possível ler os campos preenchidos:', err);
+        return;
+      }
+      for (const obj of project.pages.flatMap(p => p.objects)) {
+        const { exportName, exportValue, exportOption } = obj;
+        delete obj.exportName;
+        delete obj.exportValue;
+        delete obj.exportOption;
+        if (obj.type !== 'form' || !exportName) continue;
+        try {
+          if (obj.formType === 'text') {
+            const current = form.getTextField(exportName).getText() || '';
+            if (current !== exportValue) obj.value = current;
+          } else if (obj.formType === 'dropdown') {
+            const current = form.getDropdown(exportName).getSelected()[0] || '';
+            if (current !== exportValue) obj.value = current;
+          } else if (obj.formType === 'checkbox') {
+            obj.checked = form.getCheckBox(exportName).isChecked();
+          } else if (obj.formType === 'radio') {
+            obj.checked = form.getRadioGroup(exportName).getSelected() === exportOption;
+          }
+        } catch (err) {
+          console.warn(`Campo "${exportName}" não encontrado:`, err);
+        }
+      }
     }
 
     buildPagesDOM() {
@@ -2034,14 +2243,7 @@
       // 1. Camada de Máscaras + Textos Originais do PDF
       for (const run of pData.textRuns) {
         if (run.edited || run.moved || run.deleted) {
-          const mask = document.createElement('div');
-          mask.className = 'pdf-text-mask';
-          mask.style.left = `${(run.origX - 1.5) * z}px`;
-          mask.style.top = `${(run.origY - 1.5) * z}px`;
-          mask.style.width = `${(run.origW + 3) * z}px`;
-          mask.style.height = `${(run.origH + 3) * z}px`;
-          mask.style.backgroundColor = run.maskColor || '#ffffff';
-          els.maskLayer.appendChild(mask);
+          els.maskLayer.appendChild(this.createTextMask(run, z));
         }
 
         if (run.deleted) continue;
@@ -2061,6 +2263,7 @@
         span.style.minHeight = `${run.height * z}px`;
         if (run.edited || run.moved) {
           span.style.width = `${Math.max(run.width, 16) * z}px`;
+          if (Utils.keepsSingleLine(run)) span.style.whiteSpace = 'pre';
         }
         span.style.fontFamily = run.fontFamily;
         span.style.fontSize = `${run.fontSize * z}px`;
@@ -2100,6 +2303,24 @@
       }
     }
 
+    createTextMask(run, z) {
+      const mask = document.createElement('div');
+      mask.className = 'pdf-text-mask';
+      mask.style.left = `${(run.origX - 1.5) * z}px`;
+      mask.style.top = `${(run.origY - 1.5) * z}px`;
+      mask.style.width = `${(run.origW + 3) * z}px`;
+      mask.style.height = `${(run.origH + 3) * z}px`;
+      mask.style.backgroundColor = run.maskColor || '#ffffff';
+      if (run.origRotation) mask.style.transform = `rotate(${run.origRotation}deg)`;
+      return mask;
+    }
+
+    /** Resumo do que, se mudar, torna o texto original "editado". */
+    textSignature(run) {
+      return JSON.stringify([run.text, run.fontFamily, run.fontSize, run.color, run.bold, run.italic,
+        run.underline, run.strikethrough, run.align, run.lineHeight]);
+    }
+
     buildTextDecoration(item) {
       const dec = [];
       if (item.underline) dec.push('underline');
@@ -2108,43 +2329,61 @@
     }
 
     bindTextRunEvents(el, run, pageIndex) {
-      const activateInlineEdit = (e) => {
-        e.stopPropagation();
+      let editStart = null;
+
+      const startEditing = () => {
         // Amostra cores exatas do canvas na primeira interação
         if (!run.colorSampled) {
-          const sampled = this.pdfEngine.sampleRunColors(pageIndex, run.origX, run.origY, run.origW, run.origH);
+          const sampled = this.pdfEngine.sampleColorsForRun(pageIndex, run);
           run.maskColor = sampled.bgHex;
           run.color = sampled.fgHex;
           run.colorSampled = true;
         }
 
-        const wasEdited = run.edited;
-        run.edited = true;
+        // Abrir o texto ainda não é editar: só marca como editado se algo mudar
+        editStart = {
+          wasEdited: run.edited,
+          signature: this.textSignature(run),
+          text: run.text,
+          width: run.width,
+          height: run.height
+        };
         this.selectElement({ kind: 'textRun', pageIndex, id: run.id }, false);
 
         // Garante máscara imediata sob o texto ao abrir edição inline
-        if (!wasEdited) {
-          const z = this.state.zoom;
+        if (!run.edited && !run.moved) {
           const els = this.pageElements[pageIndex];
-          const mask = document.createElement('div');
-          mask.className = 'pdf-text-mask';
-          mask.style.left = `${(run.origX - 1.5) * z}px`;
-          mask.style.top = `${(run.origY - 1.5) * z}px`;
-          mask.style.width = `${(run.origW + 3) * z}px`;
-          mask.style.height = `${(run.origH + 3) * z}px`;
-          mask.style.backgroundColor = run.maskColor;
-          els.maskLayer.appendChild(mask);
+          els.maskLayer.appendChild(this.createTextMask(run, this.state.zoom));
         }
 
+        el.querySelectorAll('.transform-handle, .rotate-stem, .handle-rotate').forEach(h => h.remove());
         el.classList.add('edited', 'editing');
         el.style.color = run.color;
         el.style.width = `${Math.max(run.width, 20) * this.state.zoom}px`;
+        el.style.whiteSpace = Utils.keepsSingleLine(run) ? 'pre' : '';
         el.contentEditable = 'true';
         el.focus();
 
         // Sincroniza barra de formatação com este texto
         this.syncFormatBarFromItem(run);
         this.updateInspector();
+      };
+      el.startEditing = startEditing;
+
+      const activateInlineEdit = (e) => {
+        e.stopPropagation();
+        if (el.contentEditable === 'true') return;
+
+        // Fechar a edição anterior redesenha a página e troca este elemento
+        const active = document.activeElement;
+        if (active && active !== el && active.isContentEditable) active.blur();
+        if (el.isConnected) {
+          startEditing();
+          return;
+        }
+        e.preventDefault();
+        this.pageElements[pageIndex].textLayer
+          .querySelector(`[data-run-id="${run.id}"]`)?.startEditing();
       };
 
       el.addEventListener('mousedown', (e) => {
@@ -2162,7 +2401,7 @@
         } else if (this.state.tool === 'select') {
           e.stopPropagation();
           if (!run.colorSampled) {
-            const sampled = this.pdfEngine.sampleRunColors(pageIndex, run.origX, run.origY, run.origW, run.origH);
+            const sampled = this.pdfEngine.sampleColorsForRun(pageIndex, run);
             run.maskColor = sampled.bgHex;
             run.color = sampled.fgHex;
             run.colorSampled = true;
@@ -2193,7 +2432,13 @@
         if (el.contentEditable === 'true') {
           el.contentEditable = 'false';
           el.classList.remove('editing');
-          run.text = el.innerText.replace(/\r/g, '');
+          if (run.text !== editStart?.text) run.text = el.innerText.replace(/\r/g, '');
+          // Voltou a ficar como estava: desfaz a marca de edição
+          if (editStart && this.textSignature(run) === editStart.signature) {
+            run.edited = editStart.wasEdited;
+            run.width = editStart.width;
+            run.height = editStart.height;
+          }
           this.pushHistory();
           this.renderPageOverlays(pageIndex);
           this.updateSidebars();
@@ -2290,7 +2535,11 @@
           pop.addEventListener('mousedown', (e) => e.stopPropagation());
           const head = document.createElement('div');
           head.className = 'comment-popover-head';
-          head.innerHTML = `<span>${obj.author || 'Revisor'}</span><span>${obj.timestamp || ''}</span>`;
+          for (const value of [obj.author || 'Revisor', obj.timestamp || '']) {
+            const part = document.createElement('span');
+            part.textContent = value;
+            head.appendChild(part);
+          }
           const ta = document.createElement('textarea');
           ta.value = obj.text || '';
           ta.placeholder = 'Escreva seu comentário...';
@@ -2621,7 +2870,7 @@
         else angle = Math.round(angle);
         if (angle > 180) angle -= 360;
         if (angle < -180) angle += 360;
-        item.rotation = angle;
+        item.rotation = item.type === 'form' ? Utils.snapRightAngle(angle) : angle;
         if (kind === 'textRun') item.moved = true;
         this.renderPageOverlays(pageIndex);
         this.updateInspector();
@@ -3058,7 +3307,7 @@
       const { item, kind, pageIndex } = info;
       if (kind === 'textRun') {
         if (!item.colorSampled) {
-          const sampled = this.pdfEngine.sampleRunColors(pageIndex, item.origX, item.origY, item.origW, item.origH);
+          const sampled = this.pdfEngine.sampleColorsForRun(pageIndex, item);
           item.maskColor = sampled.bgHex;
           item.colorSampled = true;
         }
@@ -3191,7 +3440,7 @@
           draw: 'Desenho à mão livre',
           shape: `Forma (${o.shapeType})`,
           image: 'Imagem inserida',
-          signature: 'Assinatura digital',
+          signature: 'Assinatura',
           form: `Campo: ${o.fieldName || o.formType}`
         };
         items.push({ kind: 'object', item: o, title: titles[o.type] || o.type, meta: o.type });
@@ -3210,10 +3459,11 @@
         row.innerHTML = `
           <div class="layer-row-info">
             <div class="layer-row-title"></div>
-            <div class="layer-row-meta">${entry.meta}</div>
+            <div class="layer-row-meta"></div>
           </div>
         `;
-        row.querySelector('.layer-row-title').textContent = entry.title.slice(0, 42);
+        row.querySelector('.layer-row-title').textContent = String(entry.title).slice(0, 42);
+        row.querySelector('.layer-row-meta').textContent = entry.meta;
         row.addEventListener('click', () => {
           this.setTool('select');
           this.selectElement({ kind: entry.kind, pageIndex: this.state.currentPage, id: entry.item.id });
@@ -3242,11 +3492,13 @@
         row.className = `comment-row ${this.state.selected?.id === obj.id ? 'selected' : ''}`;
         row.innerHTML = `
           <div class="comment-row-head">
-            <strong>${obj.author || 'Revisor'} · Pág. ${pageIndex + 1}</strong>
-            <span>${obj.timestamp || ''}</span>
+            <strong></strong>
+            <span></span>
           </div>
           <div class="comment-row-body"></div>
         `;
+        row.querySelector('strong').textContent = `${obj.author || 'Revisor'} · Pág. ${pageIndex + 1}`;
+        row.querySelector('.comment-row-head span').textContent = obj.timestamp || '';
         row.querySelector('.comment-row-body').textContent = obj.text || '(Sem texto — clique para editar)';
         row.addEventListener('click', () => {
           this.goToPage(pageIndex);
@@ -3289,7 +3541,7 @@
         pData.objects = pData.objects.filter(o => o.id !== item.id);
       } else {
         if (!item.colorSampled) {
-          const sampled = this.pdfEngine.sampleRunColors(pageIndex, item.origX, item.origY, item.origW, item.origH);
+          const sampled = this.pdfEngine.sampleColorsForRun(pageIndex, item);
           item.maskColor = sampled.bgHex;
           item.colorSampled = true;
         }
@@ -3431,7 +3683,8 @@
        ------------------------------------------------------------------------ */
     captureSnapshot() {
       return this.state.pages.map(p => ({
-        textRuns: p.textRuns.map(r => ({
+        // Linhas do OCR vão inteiras, para poderem ser removidas e recriadas
+        textRuns: p.textRuns.map(r => (r.fromOcr ? { ...r } : {
           id: r.id, x: r.x, y: r.y, width: r.width, height: r.height,
           rotation: r.rotation, opacity: r.opacity, text: r.text,
           fontFamily: r.fontFamily, fontSize: r.fontSize, color: r.color, maskColor: r.maskColor,
@@ -3451,10 +3704,15 @@
         if (!pData) return;
         pData.objects = Utils.deepClone(pSnap.objects);
         const map = new Map(pSnap.textRuns.map(r => [r.id, r]));
+        pData.textRuns = pData.textRuns.filter(r => !r.fromOcr || map.has(r.id));
         pData.textRuns.forEach(r => {
           const saved = map.get(r.id);
           if (saved) Object.assign(r, saved);
         });
+        const present = new Set(pData.textRuns.map(r => r.id));
+        pSnap.textRuns
+          .filter(r => r.fromOcr && !present.has(r.id))
+          .forEach(r => pData.textRuns.push({ ...r }));
         this.renderPageOverlays(idx);
       });
       this.state.selected = null;
@@ -3669,15 +3927,23 @@
             progFill.style.width = `${overall}%`;
             progText.textContent = `OCR Página ${pIdx + 1}: ${pct}%`;
           });
-          this.state.pages[pIdx].textRuns.push(...runs);
-          totalFound += runs.length;
+          // Ignora linhas que já existem na página (texto nativo ou OCR anterior)
+          const existing = this.state.pages[pIdx].textRuns
+            .map(r => Utils.rotatedBounds(r.origX, r.origY, r.origW, r.origH, r.origRotation));
+          const fresh = runs.filter(n => {
+            const x = n.origX + n.origW / 2;
+            const y = n.origY + n.origH / 2;
+            return !existing.some(b => x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height);
+          });
+          this.state.pages[pIdx].textRuns.push(...fresh);
+          totalFound += fresh.length;
           this.renderPageOverlays(pIdx);
         }
 
         this.pushHistory();
         this.setTool('edit-text');
         document.getElementById('ocrModal').hidden = true;
-        Utils.toast(`OCR concluído! ${totalFound} linhas de texto detectadas e prontas para edição.`, 'success', 4200);
+        Utils.toast(`OCR concluído! ${totalFound} linhas novas de texto prontas para edição.`, 'success', 4200);
       } catch (err) {
         console.error(err);
         Utils.toast(`Erro no OCR: ${err.message}`, 'error', 5000);
@@ -3995,14 +4261,14 @@
       bindPropInput('propY', (info, el) => { info.item.y = parseFloat(el.value) || 0; if (info.kind === 'textRun') info.item.moved = true; });
       bindPropInput('propW', (info, el) => { info.item.width = Math.max(4, parseFloat(el.value) || 20); if (info.kind === 'textRun') info.item.moved = true; });
       bindPropInput('propH', (info, el) => { info.item.height = Math.max(4, parseFloat(el.value) || 20); if (info.kind === 'textRun') info.item.moved = true; });
-      bindPropInput('propRotation', (info, el) => { info.item.rotation = parseFloat(el.value) || 0; if (info.kind === 'textRun') info.item.moved = true; });
-      bindPropInput('propOpacity', (info, el) => { info.item.opacity = Utils.clamp((parseFloat(el.value) || 100) / 100, 0.05, 1); });
+      bindPropInput('propRotation', (info, el) => { const deg = parseFloat(el.value) || 0; info.item.rotation = info.item.type === 'form' ? Utils.snapRightAngle(deg) : deg; el.value = info.item.rotation; if (info.kind === 'textRun') info.item.moved = true; });
+      bindPropInput('propOpacity', (info, el) => { info.item.opacity = Utils.clamp((parseFloat(el.value) || 100) / 100, 0.05, 1); if (info.kind === 'textRun') info.item.edited = true; });
 
       bindPropInput('propMaskColor', (info, el) => { info.item.maskColor = el.value; info.item.edited = true; });
       document.getElementById('btnAutoMaskColor').addEventListener('click', () => {
         const info = this.getSelectedItem();
         if (!info || info.kind !== 'textRun') return;
-        const sampled = this.pdfEngine.sampleRunColors(info.pageIndex, info.item.origX, info.item.origY, info.item.origW, info.item.origH);
+        const sampled = this.pdfEngine.sampleColorsForRun(info.pageIndex, info.item);
         info.item.maskColor = sampled.bgHex;
         document.getElementById('propMaskColor').value = sampled.bgHex;
         this.pushHistory();
@@ -4016,7 +4282,7 @@
         r.x = r.origX; r.y = r.origY; r.width = r.origW; r.height = r.origH;
         r.text = r.origText; r.fontFamily = r.origFontFamily; r.fontSize = r.origFontSize;
         r.bold = r.origBold; r.italic = r.origItalic; r.underline = false; r.strikethrough = false;
-        r.rotation = 0; r.opacity = 1; r.edited = false; r.moved = false; r.deleted = false;
+        r.rotation = r.origRotation || 0; r.opacity = 1; r.edited = false; r.moved = false; r.deleted = false;
         this.pushHistory();
         this.renderPageOverlays(info.pageIndex);
         this.updateInspector();
@@ -4117,6 +4383,12 @@
           this.dom.pdfFileInput.click();
           return;
         }
+        if (ctrl && ['+', '=', '-', '_'].includes(e.key) && this.state.numPages) {
+          e.preventDefault();
+          const step = e.key === '-' || e.key === '_' ? -0.15 : 0.15;
+          this.setZoom(this.state.zoom + step);
+          return;
+        }
         if (ctrl && e.key.toLowerCase() === 's') {
           e.preventDefault();
           this.openExportModal();
@@ -4197,6 +4469,11 @@
         if (e.key === 'PageDown') { e.preventDefault(); this.goToPage(this.state.currentPage + 1); return; }
 
         // Atalhos de ferramentas (letra única)
+        if (ctrl || e.altKey) return;
+        if (e.key.toLowerCase() === 'i') {
+          document.getElementById('btnInsertImage').click();
+          return;
+        }
         const keyMap = { v: 'select', t: 'edit-text', x: 'textbox', h: 'highlight', c: 'comment', d: 'draw', s: 'shape' };
         const mapped = keyMap[e.key.toLowerCase()];
         if (mapped) {
